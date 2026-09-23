@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jetstream Airlines Disruption Recovery</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <div>
+        <h1>Jetstream Airlines Disruption Recovery</h1>
+        <p class="sub">One maintained entity — <code>passenger_journey</code> — served to ops and to the passenger.</p>
+      </div>
+    </div>
+    <div class="counts" id="counts"></div>
+  </header>
+
+  <section class="live-update hidden" id="live-update" aria-live="polite">
+    <div>
+      <div class="live-update-kicker">Current-state change detected</div>
+      <strong id="live-update-title"></strong>
+      <p id="live-update-copy"></p>
+    </div>
+    <span class="agent-pivot">Agent pivoted</span>
+  </section>
+
+  <main class="split">
+    <!-- Ops dashboard -->
+    <section class="panel" id="ops">
+      <div class="panel-head">
+        <h2>Operations</h2>
+        <span class="src">via Lightning Tables (REST)</span>
+      </div>
+      <div class="table-wrap">
+        <table id="ops-table">
+          <thead>
+            <tr>
+              <th>Passenger</th>
+              <th>Connection</th>
+              <th>To</th>
+              <th>Dep</th>
+              <th>Risk</th>
+              <th>Recommended action</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="ops-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Passenger card -->
+    <section class="panel narrow" id="passenger">
+      <div class="panel-head">
+        <h2>Passenger</h2>
+        <span class="src" id="pax-src">select a passenger</span>
+      </div>
+      <div id="pax-card" class="pax-empty">
+        <p>Select a passenger from the operations view to see their live status and concierge recovery offer.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span id="status-line">Loading…</span>
+    <button id="refresh" class="ghost">Refresh</button>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 # Change Log
 
-## v0.0.0 - YYYY-MM-DD
+## Unreleased (`dev`)
 
 ### Features and Fixes
 
-- Initial release
+- Initial demo: Terraform for Confluent Cloud, Flink SQL pipeline, seeded airline data generator, RTCE/Lightning Tables setup, operations + passenger app, and Tableflow walkthrough.
