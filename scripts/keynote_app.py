@@ -10,11 +10,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .airport_app import Deployment
-from .keynote_datagen import OFFERS, Publisher
+from .keynote_datagen import INBOUND, OFFERS, ONWARD, Publisher
 from .terraform import extract_kafka_credentials, get_project_root
 
 STATIC = Path(__file__).parent / "static"
 deployment = Deployment()
+LIVE_FLIGHT_IDS = {INBOUND, *ONWARD}
 app = FastAPI(title="Keynote flight recovery", docs_url=None, redoc_url=None)
 
 
@@ -60,10 +61,13 @@ def _passenger_offers(passenger_id: str) -> list[dict]:
 
 @app.get("/api/state")
 def state():
-    flights = _rows("flight_status")
-    risk = _rows("passenger_risk")
-    impact = _rows("flight_impact")
-    booked = _rows(OFFERS, limit=200, filter_column="status", filter_value="BOOKED")
+    # The history fixture backdates rows into these same compacted topics for the Athena/Quick
+    # analytics scene; scope the live ops dashboard to the current scenario's flights only.
+    flights = [row for row in _rows("flight_status") if row.get("key") in LIVE_FLIGHT_IDS]
+    risk = [row for row in _rows("passenger_risk") if row.get("inbound_flight_id") in LIVE_FLIGHT_IDS]
+    impact = [row for row in _rows("flight_impact") if row.get("key") in LIVE_FLIGHT_IDS]
+    booked = [row for row in _rows(OFFERS, limit=1000, filter_column="status", filter_value="BOOKED")
+              if row.get("passenger_id", "").startswith("P-")]
     return {
         "flights": flights,
         "risk": risk,

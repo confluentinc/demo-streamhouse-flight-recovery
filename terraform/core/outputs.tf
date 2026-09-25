@@ -113,6 +113,30 @@ output "resource_prefix" {
   description = "The resource name prefix used for this deployment"
 }
 
+output "aws_tableflow_access_key" {
+  value     = var.aws_tableflow_access_key
+  sensitive = true
+}
+
+output "aws_tableflow_secret_key" {
+  value     = var.aws_tableflow_secret_key
+  sensitive = true
+}
+
+output "aws_tableflow_session_token" {
+  value     = var.aws_tableflow_session_token
+  sensitive = true
+}
+
+output "aws_tableflow_credentials_present" {
+  value       = var.aws_tableflow_access_key != ""
+  description = "True when AWS credentials for the keynote Tableflow S3/Glue path were supplied — gates enable_keynote_analytics in airline-demo, mirroring bedrock_enabled"
+  # Not actually sensitive (it's a boolean), but Terraform propagates the
+  # sensitive marking from var.aws_tableflow_access_key since the value
+  # is derived from it.
+  sensitive = true
+}
+
 output "random_id" {
   value       = random_id.resource_suffix.hex
   description = "Random ID suffix used for resource naming"

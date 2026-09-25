@@ -130,6 +130,7 @@ erDiagram
 ```bash
 uv run airport-datagen                 # complete, finite demo sequence
 uv run airport-datagen --dry-run       # inspect the same sequence without publishing
+uv run airport-datagen --phase history # backdate 30 days of analytics-scene data, once, ahead of the show
 uv run airport-datagen --reset         # clear the demo data for a fresh run
 uv run deploy                          # deploy also runs the same sequence automatically
 ```
@@ -144,9 +145,9 @@ A full run needs these phases:
 2. **Delay:** update the inbound flight's `estimated_time` and `status`. Flink changes `passenger_risk` to `HIGH` and `flight_impact` to 200. Implemented and verified live through Confluent MCP.
 3. **Recovery:** the generator writes two offers for each passenger, each with a stable `offer_id`. Agent triggering and RTCE hotel reads remain planned.
 4. **Selection and hotel change:** the generator sets the first hotel's availability to zero directly in Kafka. The app checks current hotel rows, substitutes an available hotel, and displays it before booking. The other offer closes after success. The webhook and external agent remain planned.
-5. **History fixture:** planned. Generate dated flights, affected passengers, and completed recommendations for the previous month. Tableflow needs `flight_status`, `passenger_risk`, and `passenger_recommendations` as Iceberg tables in S3/AWS Glue for the Athena question.
+5. **History fixture:** implemented as an explicit `--phase history` run (not part of the default `all` sequence, since it backdates 30 days of past flights rather than replaying the live incident). It writes dated `HIST-`-prefixed flights and `H-`-prefixed passengers to `flight_status`/`passenger_connections`, which the existing Flink SQL joins into backdated `passenger_risk`/`flight_impact` rows the same way it does for live data, plus already-`BOOKED`/`CLOSED` `passenger_recommendations` rows the generator writes directly (there is no agent yet to produce them). Tableflow still needs `flight_status`, `passenger_risk`, and `passenger_recommendations` synced as Iceberg tables in S3/AWS Glue for the Athena question — that connector/catalog wiring remains planned. Because these are the same compacted "current state" topics the live ops dashboard reads, [`keynote_app.py`](../scripts/keynote_app.py) filters `/api/state` to the live scenario's known flight and passenger IDs so the history volume never leaks into the Demo 1/2 dashboard.
 
-The generator uses stable IDs and a controllable clock so the same seed reproduces the same 200 affected rows, offer IDs, and hotel switch. It derives `hotel_cost` from the synthetic hotel rate; the app updates the chosen offer's cost if its hotel changes. `--reset` writes tombstones for the fixture keys. Automated source validation and the history fixture remain to be built.
+The generator uses stable IDs and a controllable clock so the same seed reproduces the same 200 affected rows, offer IDs, hotel switch, and history fixture. It derives `hotel_cost` from the synthetic hotel rate; the app updates the chosen offer's cost if its hotel changes. `--reset` writes tombstones for the fixture keys, including the history phase. Automated source validation remains to be built.
 
 ## Cost boundary
 

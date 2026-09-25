@@ -3,6 +3,7 @@
 import argparse
 import json
 import logging
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -23,6 +24,9 @@ INBOUND = "JA417"
 ONWARD = ("JA890", "JA891", "JA892")
 HOTEL_IDS = ("Harbor Hotel", "Park Hotel")
 PASSENGER_COUNT = 200
+HISTORY_DAYS = 30
+HISTORY_CONNECTION_BUFFER_MINUTES = 90
+HISTORY_DELAY_CHOICES_MINUTES = (10, 20, 35, 50, 70, 90)
 
 
 def _clock(value: str | None) -> datetime:
@@ -65,8 +69,51 @@ def scenario(now: datetime, seed: int, phase: str):
                     recommended_at=at, recovered_at=None)
     elif phase == "sellout":
         yield HOTELS, HOTEL_IDS[0], dict(available_rooms=0, nightly_rate=Decimal("189.00"))
+    elif phase == "history":
+        yield from _history(now, seed)
     else:
         raise ValueError(f"Unknown phase: {phase}")
+
+
+def _history(now: datetime, seed: int):
+    """Backdated flights, connections, and completed offers for the Athena/Quick analytics scene.
+
+    Keys are prefixed HIST-/H- so they never collide with the live scenario's flights
+    (INBOUND, ONWARD) or passengers (P-nnnn); the app filters the live dashboard to those
+    known live IDs so this backdated volume never shows up there.
+    """
+    rng = random.Random(seed)
+    for day in range(1, HISTORY_DAYS + 1):
+        scheduled = (now - timedelta(days=day)).replace(hour=9, minute=0)
+        delay_minutes = rng.choice(HISTORY_DELAY_CHOICES_MINUTES)
+        estimated = scheduled + timedelta(minutes=delay_minutes)
+        inbound_id = f"HIST-{day:03d}-IN"
+        onward_id = f"HIST-{day:03d}-ON"
+        yield FLIGHTS, inbound_id, dict(
+            origin="ORD", destination="SFO", scheduled_time=scheduled, estimated_time=estimated,
+            status="DELAYED" if delay_minutes >= 20 else "LANDED")
+        onward_scheduled = scheduled + timedelta(minutes=HISTORY_CONNECTION_BUFFER_MINUTES)
+        yield FLIGHTS, onward_id, dict(
+            origin="SFO", destination="LAX", scheduled_time=onward_scheduled,
+            estimated_time=onward_scheduled, status="LANDED")
+        connection_minutes = int((onward_scheduled - estimated).total_seconds() // 60)
+        for n in range(1, rng.randint(8, 24) + 1):
+            passenger_id = f"H-{day:03d}-{n:03d}"
+            yield ITINERARIES, passenger_id, dict(
+                inbound_flight_id=inbound_id, connecting_flight_id=onward_id)
+            if connection_minutes >= 45:
+                continue
+            recommended_at = estimated + timedelta(minutes=1)
+            recovered_at = recommended_at + timedelta(minutes=rng.randint(5, 45))
+            booked_index = n % 2
+            for choice, index in enumerate((booked_index, 1 - booked_index), start=1):
+                yield OFFERS, f"{passenger_id}-O{choice}", dict(
+                    passenger_id=passenger_id, recommended_flight_id=onward_id,
+                    hotel_id=HOTEL_IDS[index],
+                    hotel_cost=Decimal("189.00" if index == 0 else "219.00"),
+                    status="BOOKED" if index == booked_index else "CLOSED",
+                    recommended_at=recommended_at,
+                    recovered_at=recovered_at if index == booked_index else None)
 
 
 class Publisher:
@@ -137,7 +184,8 @@ def run(now: datetime, seed: int, phases: list[str], dry_run: bool, pause: float
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Finite keynote flight recovery fixture")
-    parser.add_argument("--phase", choices=["seed", "delay", "offers", "sellout", "all"], default="all")
+    parser.add_argument(
+        "--phase", choices=["seed", "delay", "offers", "sellout", "history", "all"], default="all")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--now", help="ISO-8601 UTC scene clock")
     parser.add_argument("--pause", type=float, default=15.0, help="Seconds between phases")
@@ -150,7 +198,7 @@ def main() -> None:
         credentials = None if args.dry_run else extract_kafka_credentials("aws", get_project_root())
         publisher = Publisher(credentials, args.dry_run)
         for topic in (FLIGHTS, ITINERARIES, HOTELS, OFFERS):
-            keys = {key for phase in ("seed", "delay", "offers", "sellout")
+            keys = {key for phase in ("seed", "delay", "offers", "sellout", "history")
                     for row_topic, key, _ in scenario(now, args.seed, phase) if row_topic == topic}
             for key in sorted(keys):
                 publisher.publish(topic, key, None)

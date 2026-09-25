@@ -62,12 +62,16 @@ def generate_core_tfvars_content(
     aws_bedrock_access_key: str | None = None,
     aws_bedrock_secret_key: str | None = None,
     aws_session_token: str | None = None,
+    aws_tableflow_access_key: str | None = None,
+    aws_tableflow_secret_key: str | None = None,
+    aws_tableflow_session_token: str | None = None,
 ) -> str:
     """
     Generate terraform.tfvars content for the (AWS-only) core module.
 
-    Bedrock credentials are optional: when omitted, the topic/serving/ops stack
-    still deploys and the recovery streaming agent is skipped.
+    Bedrock and Tableflow AWS credentials are both optional: when omitted, the
+    topic/serving/ops stack still deploys and the recovery streaming agent /
+    keynote S3+Glue analytics path are skipped, respectively.
 
     Args:
         region: AWS region
@@ -76,7 +80,10 @@ def generate_core_tfvars_content(
         resource_prefix: Resource name prefix (defaults to the terraform default)
         aws_bedrock_access_key: AWS Bedrock access key (optional)
         aws_bedrock_secret_key: AWS Bedrock secret key (optional)
-        aws_session_token: AWS session token (optional, for ASIA* temp creds)
+        aws_session_token: AWS session token for Bedrock (optional, for ASIA* temp creds)
+        aws_tableflow_access_key: AWS access key for the keynote Tableflow S3/Glue path (optional)
+        aws_tableflow_secret_key: AWS secret key for the keynote Tableflow S3/Glue path (optional)
+        aws_tableflow_session_token: AWS session token for Tableflow (optional, for ASIA* temp creds)
 
     Returns:
         Formatted terraform.tfvars content
@@ -94,6 +101,12 @@ confluent_cloud_api_secret = "{api_secret}"
         content += f'aws_bedrock_secret_key = "{aws_bedrock_secret_key}"\n'
         if aws_session_token:
             content += f'aws_session_token = "{aws_session_token}"\n'
+
+    if aws_tableflow_access_key and aws_tableflow_secret_key:
+        content += f'aws_tableflow_access_key = "{aws_tableflow_access_key}"\n'
+        content += f'aws_tableflow_secret_key = "{aws_tableflow_secret_key}"\n'
+        if aws_tableflow_session_token:
+            content += f'aws_tableflow_session_token = "{aws_tableflow_session_token}"\n'
 
     return content
 
@@ -128,6 +141,9 @@ def write_tfvars_for_deployment(
         aws_bedrock_access_key=get_credential_value(creds, "aws_bedrock_access_key"),
         aws_bedrock_secret_key=get_credential_value(creds, "aws_bedrock_secret_key"),
         aws_session_token=get_credential_value(creds, "aws_session_token"),
+        aws_tableflow_access_key=get_credential_value(creds, "aws_tableflow_access_key"),
+        aws_tableflow_secret_key=get_credential_value(creds, "aws_tableflow_secret_key"),
+        aws_tableflow_session_token=get_credential_value(creds, "aws_tableflow_session_token"),
     )
     if write_tfvars_file(core_tfvars_path, content):
         print(f"✓ Wrote {core_tfvars_path}")

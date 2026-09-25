@@ -29,6 +29,7 @@ API-KEYS-AWS.md
 *.key
 secrets/
 **/credentials.json
+*.tfvars.backup
 
 # Terraform
 .terraform/

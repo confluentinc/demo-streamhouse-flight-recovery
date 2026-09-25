@@ -18,6 +18,35 @@ def test_fixture_has_200_passengers_and_two_offers_each():
     assert all(len(value) == 2 for topic, _, value in seed if topic == keynote_datagen.ITINERARIES)
 
 
+def test_history_fixture_is_backdated_and_disjoint_from_live_ids():
+    now = datetime(2026, 9, 24, 21, 0)
+    live_flight_ids = {keynote_datagen.INBOUND, *keynote_datagen.ONWARD}
+    live_passenger_ids = {f"P-{n:04d}" for n in range(1, keynote_datagen.PASSENGER_COUNT + 1)}
+    history = list(keynote_datagen.scenario(now, 42, "history"))
+
+    flight_keys = {key for topic, key, _ in history if topic == keynote_datagen.FLIGHTS}
+    passenger_keys = {key for topic, key, _ in history if topic == keynote_datagen.ITINERARIES}
+    assert len(flight_keys) == keynote_datagen.HISTORY_DAYS * 2
+    assert flight_keys.isdisjoint(live_flight_ids)
+    assert passenger_keys.isdisjoint(live_passenger_ids)
+    assert all(key.startswith("HIST-") for key in flight_keys)
+    assert all(key.startswith("H-") for key in passenger_keys)
+
+    for topic, _, value in history:
+        if topic == keynote_datagen.FLIGHTS:
+            assert value["scheduled_time"] < now
+        if topic == keynote_datagen.OFFERS:
+            assert value["status"] in {"BOOKED", "CLOSED"}
+            assert (value["recovered_at"] is not None) == (value["status"] == "BOOKED")
+
+    booked = [value for topic, _, value in history
+              if topic == keynote_datagen.OFFERS and value["status"] == "BOOKED"]
+    assert booked, "expects at least one completed historical recovery to query in Athena"
+
+    again = list(keynote_datagen.scenario(now, 42, "history"))
+    assert history == again
+
+
 def test_selection_uses_available_hotel_then_books(monkeypatch):
     offers = [
         {"key": "P-0001-O1", "passenger_id": "P-0001", "recommended_flight_id": "JA891",

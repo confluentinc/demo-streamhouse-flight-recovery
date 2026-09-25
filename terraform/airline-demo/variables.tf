@@ -19,3 +19,15 @@ variable "tableflow_topics" {
   type        = list(string)
   default     = ["passenger_journey", "passenger_recovery", "flight_ops_state"]
 }
+
+variable "enable_keynote_analytics" {
+  description = "Enable Tableflow with customer-owned S3 storage + an AWS Glue Data Catalog integration on the keynote topics, for the Demo 3 Athena/Amazon Quick analytics scene. This toggle alone isn't enough — it also needs core's aws_tableflow_access_key/secret_key set (optional, like aws_bedrock_access_key; auto-skipped when empty, see local.keynote_analytics_enabled). Unlike enable_tableflow's Confluent Managed Storage, this creates a real S3 bucket and a cross-account IAM role with S3/IAM/Glue permissions."
+  type        = bool
+  default     = true
+}
+
+variable "keynote_tableflow_topics" {
+  description = "Keynote topics to expose as Iceberg tables in the customer-owned S3 bucket, synced to AWS Glue. Default matches the keynote data contract's Athena question: flight status, passenger risk, and the recovery offers."
+  type        = list(string)
+  default     = ["flight_status", "passenger_risk", "passenger_recommendations"]
+}

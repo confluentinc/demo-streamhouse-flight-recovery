@@ -47,6 +47,14 @@ locals {
   # The recovery agent needs both the toggle AND a Bedrock connection in core.
   agent_enabled = var.enable_streaming_agent && local.core.bedrock_enabled
 
+  # Demo 3's S3/Glue path needs both the toggle AND AWS Tableflow creds in core.
+  # Mirrors agent_enabled: leave the creds empty and this cleanly skips instead
+  # of failing terraform apply. aws_tableflow_credentials_present is a boolean,
+  # not a secret, but Terraform marks it sensitive anyway since it's derived
+  # from var.aws_tableflow_access_key — nonsensitive() is needed because
+  # count/for_each can't take a sensitive value.
+  keynote_analytics_enabled = var.enable_keynote_analytics && nonsensitive(local.core.aws_tableflow_credentials_present)
+
   # Source tables (datagen inputs) + the passenger_recovery sink — no
   # interdependencies, created in parallel. The derived passenger_journey and
   # flight_ops_state tables are materialized tables, defined as their own resources
@@ -255,7 +263,7 @@ resource "confluent_flink_statement" "insert_passenger_recovery" {
 # principal that can enable Tableflow — app-manager holds EnvironmentAdmin.
 # (Our RTCE Global key can't: it belongs to the DeveloperRead-only rtce-reader SA.)
 resource "confluent_api_key" "tableflow" {
-  count = var.enable_tableflow ? 1 : 0
+  count = (var.enable_tableflow || local.keynote_analytics_enabled) ? 1 : 0
 
   display_name = "${local.core.resource_prefix}-${local.core.random_id}-tableflow-api-key"
   description  = "Tableflow API key owned by the app-manager service account"
