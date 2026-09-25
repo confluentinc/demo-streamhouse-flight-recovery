@@ -1,5 +1,7 @@
 # Flight recovery data model
 
+**Legacy implementation.** The [keynote data schema](./keynote-data-gen-schemas-erd.md) now has executable SQL, a finite generator, and an app. The seven tables below describe the older pipeline that still exists in the deployed environment; they are not the keynote source schema.
+
 The executable definitions are in [the Flink SQL directory](../terraform/airline-demo/sql/). This page explains how the tables fit together and where to change them. For deployment and demo steps, see the [walkthrough](./walkthrough.md).
 
 ## Data flow

@@ -50,3 +50,5 @@ recordings/**/*.mov
 
 # Local-only working docs (never commit)
 internal/
+handoffs/
+terraform/core/DEPLOYED_RESOURCES.md

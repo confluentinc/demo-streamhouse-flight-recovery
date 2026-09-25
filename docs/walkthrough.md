@@ -1,5 +1,15 @@
 # Airport Disruption Recovery — Streamhouse Walkthrough
 
+> **Keynote demo:** `uv run airport-datagen` and `uv run airport-app` now run the [keynote data schema](./keynote-data-gen-schemas-erd.md). The older JA417/passenger-journey walkthrough below remains as a legacy reference; use the explicit Python modules shown there.
+
+## Keynote demo run
+
+For a fresh deployment, `uv run deploy --with-datagen` provisions the tables and runs the finite fixture. Run `uv run setup-rtce` for Lightning Tables access, then `uv run airport-app` to open the operations and passenger view. A separate `uv run airport-datagen` replays the same sequence with 200 passengers, two offers each, and a hotel sellout. Use `--phase seed`, `delay`, `offers`, or `sellout` to rehearse a scene; `--dry-run` prints the records and `--reset` writes tombstones for that seed's keys.
+
+The live keynote demo uses `flight_status`, `passenger_connections`, `hotel_inventory`, `passenger_risk`, `flight_impact`, and `passenger_recommendations`. The seven-column `passenger_itineraries` topic below belongs to the legacy flow. The hosted recovery agent, Webhooks source connector, and S3/Glue/Athena scene are still planned.
+
+## Legacy JA417 walkthrough
+
 In this demo, one inbound flight slips. Flink maintains each passenger's current journey; the app
 reads it through Lightning Tables, and a connected agent can query it through RTCE/MCP. Tableflow
 materializes the served topics as Iceberg tables. Built on [Confluent Cloud for Apache Flink](https://docs.confluent.io/cloud/current/flink/overview.html),
@@ -88,7 +98,7 @@ uv run setup-rtce --client claude    # or: codex | gemini
 ### 1. Generate the incident
 
 ```bash
-uv run airport-datagen          # seed (all OK), wait, then slip JA417
+uv run python -m scripts.airport_datagen  # seed (all OK), wait, then slip JA417
 ```
 
 Inbound **JA417 (ORD→SFO)** slips **+35 min**; 12 passengers on 4 onward flights out of SFO flip to
@@ -104,7 +114,7 @@ Other phases: `--phase seed` (steady state), `--phase slip` (fire the cascade), 
 Select Maya Chen (`P-1009`) in the app while her JA540/Kimpton overnight proposal is visible, then run:
 
 ```bash
-uv run airport-datagen --phase pivot
+uv run python -m scripts.airport_datagen --phase pivot
 ```
 
 JA512 moves 25 minutes later. Flink recomputes Maya's connection window from 11 to 36 minutes and
@@ -116,7 +126,7 @@ in a **Current-state change detected** banner. Approve only after EXPEDITE appea
 ### 3. Serve the operation (Lightning Tables + act)
 
 ```bash
-uv run airport-app              # http://127.0.0.1:8000
+uv run python -m scripts.airport_app  # http://127.0.0.1:8000
 ```
 
 Left = **Operations**: every at-risk passenger + the recommended recovery, each with **Approve**.
@@ -177,7 +187,7 @@ An external catalog integration requires additional storage and catalog configur
 ### Reset between runs
 
 ```bash
-uv run airport-datagen --phase all
+uv run python -m scripts.airport_datagen --phase all
 ```
 
 Re-runs the scenario and clears `EXECUTED` approvals (the agent re-proposes once each passenger is
@@ -196,7 +206,7 @@ Tables and to a connected agent through RTCE/MCP, and enables Tableflow for Iceb
 - **App shows `503 … No RTCE/Lightning Global API key`** — run `uv run setup-rtce`; it writes the
   Global key to `credentials.env`.
 - **`/api/state` empty or all-OK** — datagen hasn't slipped yet, or Flink is catching up. Run
-  `uv run airport-datagen --phase all` and wait for the updated rows.
+  `uv run python -m scripts.airport_datagen --phase all` and wait for the updated rows.
 - **`passenger_recovery` empty (no recommended actions)** — Bedrock creds weren't provided at
   deploy, so the agent was skipped. Re-deploy with Bedrock creds.
 - **Lightning `curl` / app read returns 401** — Global key still propagating (retry), or the topic

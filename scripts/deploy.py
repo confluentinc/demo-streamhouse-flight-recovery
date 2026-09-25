@@ -101,6 +101,10 @@ def _deploy(root, targets) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Deploy the Streamhouse airline demo")
     parser.add_argument(
+        "--with-datagen", action="store_true",
+        help="Run the finite keynote fixture after both Terraform roots finish",
+    )
+    parser.add_argument(
         "--automated",
         action="store_true",
         help="Non-interactive: load credentials.env, skip prompts, run setup-mcp after deploy",
@@ -149,6 +153,8 @@ def main():
             if value:
                 os.environ[key] = value
         _deploy(root, DEPLOY_TARGETS)
+        if args.with_datagen:
+            _run_keynote_datagen()
         if args.automated:
             setup_mcp()
         _print_env_name(root)
@@ -255,7 +261,38 @@ def main():
         if value:
             os.environ[key] = value
     _deploy(root, DEPLOY_TARGETS)
+    if args.with_datagen:
+        _run_keynote_datagen()
     _print_env_name(root)
+
+
+def _run_keynote_datagen() -> None:
+    """Use the same sequence as `uv run airport-datagen` after provisioning."""
+    import time
+
+    from confluent_kafka.schema_registry import SchemaRegistryClient
+
+    from .keynote_datagen import _clock, run
+    from .terraform import extract_kafka_credentials
+
+    credentials = extract_kafka_credentials("aws", get_project_root())
+    registry = SchemaRegistryClient({
+        "url": credentials["schema_registry_url"],
+        "basic.auth.user.info": (
+            f"{credentials['schema_registry_api_key']}:{credentials['schema_registry_api_secret']}")})
+    subjects = ("flight_status-value", "passenger_connections-value",
+                "hotel_inventory-value", "passenger_recommendations-value")
+    for attempt in range(30):
+        try:
+            for subject in subjects:
+                registry.get_latest_version(subject)
+            break
+        except Exception:
+            if attempt == 29:
+                raise RuntimeError("Keynote schemas did not become ready after deployment") from None
+            time.sleep(2)
+    run(_clock(None), seed=42, phases=["seed", "delay", "offers", "sellout"],
+        dry_run=False, pause=15)
 
 
 def _print_env_name(root) -> None:

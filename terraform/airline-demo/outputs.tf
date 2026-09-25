@@ -8,6 +8,16 @@ output "served_topics" {
   description = "Maintained/served tables (Lightning + RTCE read these)"
 }
 
+output "keynote_source_topics" {
+  value       = ["flight_status", "passenger_connections", "hotel_inventory"]
+  description = "Keynote source feeds"
+}
+
+output "keynote_served_topics" {
+  value       = ["passenger_risk", "flight_impact", "passenger_recommendations"]
+  description = "Keynote Flink outputs and recovery offers"
+}
+
 output "streaming_agent_enabled" {
   value       = local.agent_enabled
   description = "Whether the recovery model/agent/INSERT were deployed (needs Bedrock creds in core)"

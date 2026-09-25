@@ -138,9 +138,11 @@ def _discover_demo_topics(creds_file: Path) -> list[str]:
             outputs = _read_terraform_outputs(state_path)
             source = outputs.get("source_topics") or []
             served = outputs.get("served_topics") or []
+            keynote_source = outputs.get("keynote_source_topics") or []
+            keynote_served = outputs.get("keynote_served_topics") or []
             # de-dupe while preserving order (sources first, then served)
             seen: dict[str, None] = {}
-            for t in [*source, *served]:
+            for t in [*source, *served, *keynote_source, *keynote_served]:
                 if isinstance(t, str):
                     seen.setdefault(t, None)
             return list(seen)
@@ -696,14 +698,25 @@ def _parse_topics(raw: str) -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
-def _build_lightning_query(topic: str, key: str | None, limit: int) -> str:
+def _build_lightning_query(
+    topic: str, key: str | None, limit: int,
+    filter_column: str | None = None, filter_value: str | None = None,
+) -> str:
     """Build the SELECT a Lightning Query runs.
 
     Default is a small scan of the whole table; passing a KEY narrows it to one row
-    (the per-passenger lookup the demo narrative uses, e.g. --key P-1001). The table
-    name is backtick-quoted and the KEY column double-quoted, matching what the
-    Lightning/RTCE SQL surface accepts. Single quotes in the key value are escaped.
+    (the per-passenger lookup the demo narrative uses, e.g. --key P-1001).
+    Passenger recommendations also support targeted passenger_id and status filters.
+    The table name is backtick-quoted and the KEY column double-quoted, matching
+    what the Lightning/RTCE SQL surface accepts. Literal quotes are escaped.
     """
+    if filter_column is not None:
+        if topic != "passenger_recommendations" or filter_column not in {"passenger_id", "status"}:
+            raise ValueError("Unsupported Lightning filter")
+        if filter_value is None or key is not None:
+            raise ValueError("Lightning filter requires a value and no key")
+        safe_value = filter_value.replace("'", "''")
+        return f"SELECT * FROM `{topic}` WHERE {filter_column} = '{safe_value}' LIMIT {limit}"
     if key:
         safe_key = key.replace("'", "''")
         return f"SELECT * FROM `{topic}` WHERE \"KEY\" = '{safe_key}' LIMIT {limit}"

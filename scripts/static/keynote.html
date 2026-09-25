@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flight recovery keynote</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar"><div class="brand"><div><h1>Flight recovery</h1>
+    <p class="sub">Live flight status, connection risk, and passenger offers</p></div></div>
+    <div class="counts" id="counts"></div></header>
+  <main class="split">
+    <section class="panel"><div class="panel-head"><h2>Operations</h2><span class="src">Lightning Tables</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Flight</th><th>Route</th><th>Status</th><th>Affected</th></tr></thead>
+      <tbody id="flights"></tbody></table></div>
+      <div class="panel-head"><h2>At-risk passengers</h2></div>
+      <div class="table-wrap"><table><thead><tr><th>Passenger</th><th>Connection</th><th>Minutes</th><th>Risk</th></tr></thead>
+      <tbody id="passengers"></tbody></table></div>
+    </section>
+    <section class="panel narrow"><div class="panel-head"><h2>Passenger recovery</h2></div>
+      <div id="passenger-card" class="pax-empty">Select a passenger.</div></section>
+  </main>
+  <footer class="foot"><span id="status-line">Loading…</span><button id="refresh" class="ghost">Refresh</button></footer>
+  <script src="/static/keynote.js"></script>
+</body>
+</html>
