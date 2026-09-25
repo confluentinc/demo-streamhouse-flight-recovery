@@ -15,15 +15,12 @@ An inbound flight slips, putting 200 synthetic connecting passengers at risk. Fl
 Prerequisites: `uv`, `terraform`, the Confluent CLI, and a Confluent Cloud account. The full setup is in the [walkthrough](./docs/walkthrough.md#prerequisites).
 
 ```bash
-uv run deploy --with-datagen       # fresh deployment, then finite keynote fixture
-uv run setup-rtce                  # enable RTCE + Lightning Tables, register MCP with your coding agent
-uv run airport-datagen             # replay the finite fixture later, if needed
-uv run airport-app                 # ops + passenger app at http://127.0.0.1:8000
-uv run airport-datagen --phase delay  # replay only the delayed flight update
-uv run destroy                     # tear everything down
+uv run deploy
 ```
 
-Deployment, Tableflow status checks, troubleshooting, and reset are in the [walkthrough](./docs/walkthrough.md). The [data model](./docs/data-model.md) explains the tables and links to the executable Flink SQL.
+That's it. Deploy asks for your Confluent Cloud login and API key, provisions everything, publishes the demo data, enables Lightning Tables and RTCE, and offers to start the app at http://127.0.0.1:8000. Later, `uv run airport-app` restarts the app.
+
+`uv run destroy` tears everything down. Replaying the data, running single scenes, troubleshooting, and reset are in the [walkthrough](./docs/walkthrough.md).
 
 ## The app
 

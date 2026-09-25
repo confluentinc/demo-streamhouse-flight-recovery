@@ -131,12 +131,12 @@ erDiagram
 uv run airport-datagen                 # complete, finite demo sequence
 uv run airport-datagen --dry-run       # inspect the same sequence without publishing
 uv run airport-datagen --reset         # clear the demo data for a fresh run
-uv run deploy --with-datagen           # fresh deploy, then run the same sequence automatically
+uv run deploy                          # deploy also runs the same sequence automatically
 ```
 
 Retain `--seed` and `--now` for reproducible data and a controllable clock. Keep phase selection for capture and reset, but make the no-argument command sufficient for a normal run. Use short, bounded waits between the staged changes so the flight delay and hotel switch remain visible. The process should finish cleanly; it does not need to stay running as a background service.
 
-The optional deploy path in [`deploy.py`](../scripts/deploy.py) runs after both Terraform roots succeed. It calls the same generator used by `uv run airport-datagen` and waits for the four required value schemas. Re-running deploy without `--with-datagen` does not replay the incident. The Webhooks source connector is still a future integration; the generator writes the hotel update directly to Kafka.
+[`deploy.py`](../scripts/deploy.py) runs the generator after both Terraform roots succeed. It calls the same generator used by `uv run airport-datagen` and waits for the four required value schemas. Re-running deploy replays the incident from the start. The Webhooks source connector is still a future integration; the generator writes the hotel update directly to Kafka.
 
 A full run needs these phases:
 

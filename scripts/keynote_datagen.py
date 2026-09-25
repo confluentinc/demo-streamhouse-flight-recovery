@@ -19,8 +19,8 @@ FLIGHTS = "flight_status"
 ITINERARIES = "passenger_connections"
 HOTELS = "hotel_inventory"
 OFFERS = "passenger_recommendations"
-INBOUND = "JA417-KEYNOTE"
-ONWARD = ("JA890-KEYNOTE", "JA891-KEYNOTE", "JA892-KEYNOTE")
+INBOUND = "JA417"
+ONWARD = ("JA890", "JA891", "JA892")
 HOTEL_IDS = ("Harbor Hotel", "Park Hotel")
 PASSENGER_COUNT = 200
 
@@ -44,7 +44,7 @@ def scenario(now: datetime, seed: int, phase: str):
             yield FLIGHTS, flight_id, dict(origin=origin, destination=destination,
                                            scheduled_time=at, estimated_time=at, status="ON_TIME")
         for n in range(1, PASSENGER_COUNT + 1):
-            yield ITINERARIES, f"K-{seed}-{n:04d}", dict(
+            yield ITINERARIES, f"P-{n:04d}", dict(
                 inbound_flight_id=INBOUND, connecting_flight_id=ONWARD[0])
         for hotel_id, rate in zip(HOTEL_IDS, (Decimal("189.00"), Decimal("219.00")), strict=True):
             yield HOTELS, hotel_id, dict(available_rooms=200, nightly_rate=rate)
@@ -55,7 +55,7 @@ def scenario(now: datetime, seed: int, phase: str):
     elif phase == "offers":
         at = now + timedelta(minutes=66)
         for n in range(1, PASSENGER_COUNT + 1):
-            passenger_id = f"K-{seed}-{n:04d}"
+            passenger_id = f"P-{n:04d}"
             for choice in (1, 2):
                 yield OFFERS, f"{passenger_id}-O{choice}", dict(
                     passenger_id=passenger_id,
@@ -142,7 +142,7 @@ def main() -> None:
     parser.add_argument("--now", help="ISO-8601 UTC scene clock")
     parser.add_argument("--pause", type=float, default=15.0, help="Seconds between phases")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--reset", action="store_true", help="Write tombstones for this seed's fixture keys")
+    parser.add_argument("--reset", action="store_true", help="Write tombstones for the fixture keys")
     args = parser.parse_args()
     setup_logging()
     now = _clock(args.now)

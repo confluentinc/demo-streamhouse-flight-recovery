@@ -2,12 +2,15 @@
 """
 Deploy the Streamhouse airline flight-recovery demo to Confluent Cloud.
 
-Always deploys, in order:
+Always runs, in order:
   1. terraform/core        — environment, cluster, Flink pool, service accounts,
                              API keys, RTCE reader, (optional) Bedrock connection.
   2. terraform/airline-demo — the airline Flink pipeline (tables, maintained state,
                              ops spoke, and the recovery streaming agent when
                              Bedrock creds are present).
+  3. The keynote data generator (same sequence as `uv run airport-datagen`).
+  4. Lightning Tables and RTCE on the demo topics, plus the RTCE MCP server for
+     the coding agent chosen up front (same as `uv run setup-rtce`).
 
 AWS-only by design (RTCE + Flink Native Inference are AWS-only), so there is no
 cloud or region choice. Resource names use TF_VAR_resource_prefix from
@@ -15,9 +18,9 @@ credentials.env, or DEFAULT_PREFIX when unset (saved on first run so later
 runs keep the same names).
 
 Usage:
-  uv run deploy               # interactive
-  uv run deploy --automated   # non-interactive from credentials.env, then setup-mcp
-  uv run deploy --testing     # non-interactive from credentials.env, no setup-mcp
+  uv run deploy               # interactive; the only command a person needs
+  uv run deploy --automated   # bots: non-interactive from credentials.env, registers Claude Code
+  uv run deploy --testing     # bots: non-interactive from credentials.env, no MCP registration
 """
 
 import argparse
@@ -28,12 +31,12 @@ import time
 
 from dotenv import dotenv_values, set_key
 
+from scripts import setup_rtce
 from scripts.credentials import (
     generate_confluent_api_keys,
     load_or_create_credentials_file,
 )
 from scripts.login_checks import _attempt_login_quiet, ensure_confluent_login
-from scripts.mcp_setup import main as setup_mcp
 from scripts.terraform import get_project_root, run_terraform_output
 from scripts.terraform_runner import run_terraform
 from scripts.tfvars import write_tfvars_for_deployment
@@ -101,18 +104,14 @@ def _deploy(root, targets) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Deploy the Streamhouse airline demo")
     parser.add_argument(
-        "--with-datagen", action="store_true",
-        help="Run the finite keynote fixture after both Terraform roots finish",
-    )
-    parser.add_argument(
         "--automated",
         action="store_true",
-        help="Non-interactive: load credentials.env, skip prompts, run setup-mcp after deploy",
+        help="Bots: load credentials.env, skip prompts, register the RTCE MCP server with Claude Code",
     )
     parser.add_argument(
         "--testing",
         action="store_true",
-        help="Non-interactive: load credentials.env, skip prompts, no setup-mcp",
+        help="Bots: load credentials.env, skip prompts, no MCP registration",
     )
     args = parser.parse_args()
     if args.automated and args.testing:
@@ -153,11 +152,7 @@ def main():
             if value:
                 os.environ[key] = value
         _deploy(root, DEPLOY_TARGETS)
-        if args.with_datagen:
-            _run_keynote_datagen()
-        if args.automated:
-            setup_mcp()
-        _print_env_name(root)
+        _finish(root, "claude" if args.automated else "none")
         return
 
     # ---- Interactive -----------------------------------------------------
@@ -250,7 +245,9 @@ def main():
     print(f"Confluent CLI auto-login: {'saved' if final_creds.get('CONFLUENT_EMAIL') else 'not saved'}")
     agent_state = "ENABLED" if final_creds.get("TF_VAR_aws_bedrock_access_key") else "skipped (no Bedrock creds)"
     print(f"Streaming agent: {agent_state}")
-    print(f"Deploying: {', '.join(DEPLOY_TARGETS)}")
+    print(f"Deploying: {', '.join(DEPLOY_TARGETS)}, then demo data and RTCE")
+
+    client = setup_rtce._pick_client()
 
     if input("\nReady to deploy? (y/n): ").strip().lower() != "y":
         print("Deployment cancelled.")
@@ -261,8 +258,21 @@ def main():
         if value:
             os.environ[key] = value
     _deploy(root, DEPLOY_TARGETS)
-    if args.with_datagen:
-        _run_keynote_datagen()
+    _finish(root, client)
+    if input("\nStart the app at http://127.0.0.1:8000 now? (Y/n): ").strip().lower() in ("", "y"):
+        from scripts.keynote_app import main as run_app
+
+        run_app([])
+    else:
+        print("Start it later with: uv run airport-app")
+
+
+def _finish(root, client: str) -> None:
+    """Publish the demo data, then enable Lightning Tables/RTCE on the demo topics."""
+    print("\n=== Publishing demo data ===")
+    _run_keynote_datagen()
+    print("\n=== Enabling Lightning Tables and RTCE ===")
+    setup_rtce.main(["--client", client])
     _print_env_name(root)
 
 

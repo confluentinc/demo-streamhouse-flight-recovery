@@ -131,11 +131,11 @@ def index():
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="uv run airport-app")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     import uvicorn
 
     uvicorn.run(app, host=args.host, port=args.port)

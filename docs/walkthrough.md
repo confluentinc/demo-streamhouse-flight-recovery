@@ -4,7 +4,7 @@
 
 ## Keynote demo run
 
-For a fresh deployment, `uv run deploy --with-datagen` provisions the tables and runs the finite fixture. Run `uv run setup-rtce` for Lightning Tables access, then `uv run airport-app` to open the operations and passenger view. A separate `uv run airport-datagen` replays the same sequence with 200 passengers, two offers each, and a hotel sellout. Use `--phase seed`, `delay`, `offers`, or `sellout` to rehearse a scene; `--dry-run` prints the records and `--reset` writes tombstones for that seed's keys.
+`uv run deploy` provisions the tables, runs the finite fixture, enables Lightning Tables and RTCE, and offers to start `uv run airport-app`, the operations and passenger view. A separate `uv run airport-datagen` replays the same sequence with 200 passengers, two offers each, and a hotel sellout. Use `--phase seed`, `delay`, `offers`, or `sellout` to rehearse a scene; `--dry-run` prints the records and `--reset` writes tombstones for the fixture keys.
 
 The live keynote demo uses `flight_status`, `passenger_connections`, `hotel_inventory`, `passenger_risk`, `flight_impact`, and `passenger_recommendations`. The seven-column `passenger_itineraries` topic below belongs to the legacy flow. The hosted recovery agent, Webhooks source connector, and S3/Glue/Athena scene are still planned.
 
@@ -79,17 +79,11 @@ tables, the maintained-state SQL, and the recovery agent when Bedrock creds are 
 uv run deploy
 ```
 
-It prompts for your Confluent Cloud login + API key and (optionally) AWS Bedrock credentials.
-
-Then enable RTCE + Lightning and register the MCP server with your coding agent:
-
-```bash
-uv run setup-rtce --client claude    # or: codex | gemini
-```
+It prompts for your Confluent Cloud login + API key, (optionally) AWS Bedrock credentials, and which coding agent should get the RTCE MCP server. After Terraform it publishes the keynote data and enables RTCE + Lightning on the demo topics. To re-register the MCP server later, run `uv run setup-rtce`.
 
 > [!NOTE]
 >
-> This mints an org-wide (Global) API key for the reader service account and writes it to the
+> Deploy mints an org-wide (Global) API key for the reader service account and writes it to the
 > git-ignored `credentials.env`. It's the key the app and Lightning queries authenticate with —
 > keep it out of screenshots and recordings.
 

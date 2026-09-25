@@ -13,7 +13,7 @@ This repository contains the older airline demo and the new keynote demo. The [k
 * Keep the hotel availability change and the passenger recovery visible. The keynote generator currently emits two deterministic offers; the app checks hotel inventory through Lightning before selection and booking. The planned agent uses a model hosted in Confluent and reads hotel context through RTCE/MCP. Do not present the older Bedrock agent as that keynote flow.
 * Treat the older `passenger_journey`, gate/crew, rebooking-inventory, approval, and Maya pivot story as the current implementation or historical planning, depending on the document. They are not the approved keynote script.
 * Use the [keynote data schema](./docs/keynote-data-gen-schemas-erd.md) and [simple architecture diagram](./docs/keynote-architecture.excalidraw) as the keynote design references before changing executable schemas.
-* Keep the keynote generator behind `uv run airport-datagen`. `uv run deploy --with-datagen` runs the same finite sequence after provisioning. Use targeted Terraform apply for incremental changes to an existing deployment.
+* Keep the keynote generator behind `uv run airport-datagen`. `uv run deploy` runs the same finite sequence after provisioning, then enables Lightning Tables and RTCE. People run only `uv run deploy`; its `--automated`/`--testing` flags are for bots. Use targeted Terraform apply for incremental changes to an existing deployment.
 
 ## Technical boundaries
 

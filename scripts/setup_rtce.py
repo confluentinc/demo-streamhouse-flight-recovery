@@ -453,18 +453,15 @@ def _ask(prompt: str) -> str:
 
 
 def _pick_client() -> str:
-    """Ask which MCP client to register with. Returns 'claude', 'codex', or 'gemini'."""
+    """Ask which MCP client to register with. Returns 'claude', 'codex', 'gemini', or 'none'."""
     print()
-    print("Which AI assistant should the MCP server be registered with?")
+    print("Which AI assistant should the RTCE MCP server be registered with?")
     print("  1. Claude Code (default)")
     print("  2. OpenAI Codex")
     print("  3. Gemini")
-    raw = input("Enter 1, 2, or 3 [1]: ").strip()
-    if raw == "2":
-        return "codex"
-    if raw == "3":
-        return "gemini"
-    return "claude"
+    print("  4. None (the app still works)")
+    raw = input("Enter 1, 2, 3, or 4 [1]: ").strip()
+    return {"2": "codex", "3": "gemini", "4": "none"}.get(raw, "claude")
 
 
 def _claude_argv_rtce(
@@ -788,7 +785,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--client",
-        choices=("claude", "codex", "gemini"),
+        choices=("claude", "codex", "gemini", "none"),
         default=None,
         help="which coding agent to register with (default: prompt interactively)",
     )
@@ -824,8 +821,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def main():
-    args = _parse_args()
+def main(argv: list[str] | None = None):
+    args = _parse_args(argv)
 
     creds_file = _find_credentials_file()
     creds = _load_env_file(creds_file)
@@ -919,6 +916,14 @@ def main():
         f"/environments/{infra['env_id']}"
         f"/kafka-clusters/{infra['cluster_id']}"
     )
+
+    if client == "none":
+        print(f"\n✓ RTCE enabled on: {', '.join(topics)} (no coding agent registered)")
+        if args.dry_run:
+            return
+        ok, status = _test_mcp_connection(url, token)
+        print(f"  MCP endpoint check: {'✓' if ok else '⚠'} ({status or 'connection error'})")
+        return
 
     if client == "gemini":
         scope_note = _register_gemini(server_name, url, token, dry_run=args.dry_run)
