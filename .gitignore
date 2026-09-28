@@ -29,6 +29,7 @@ API-KEYS-AWS.md
 *.key
 secrets/
 **/credentials.json
+*.tfvars.backup
 
 # Terraform
 .terraform/
@@ -50,3 +51,5 @@ recordings/**/*.mov
 
 # Local-only working docs (never commit)
 internal/
+handoffs/
+terraform/core/DEPLOYED_RESOURCES.md

@@ -87,11 +87,12 @@ class Deployment:
         return f"https://sql.{region}.{cloud}.confluent.cloud/query/v1alpha1"
 
     def lightning_query(
-        self, topic: str, key: str | None = None, limit: int = 200
+        self, topic: str, key: str | None = None, limit: int = 200,
+        filter_column: str | None = None, filter_value: str | None = None,
     ) -> list[dict]:
         """Run a Lightning Query and return rows as a list of column->value dicts."""
         self._load_rtce()
-        query = rtce._build_lightning_query(topic, key, limit)
+        query = rtce._build_lightning_query(topic, key, limit, filter_column, filter_value)
         try:
             resp = requests.post(
                 self.lightning_url,

@@ -37,10 +37,10 @@ deploy = "scripts.deploy:main"
 destroy = "scripts.destroy:main"
 setup-mcp = "scripts.mcp_setup:main"
 setup-rtce = "scripts.setup_rtce:main"
-airport-datagen = "scripts.airport_datagen:main"
+airport-datagen = "scripts.keynote_datagen:main"
 api-keys = "scripts.workshop_key_manager:main"
 test-bedrock = "scripts.test_bedrock_credentials:main"
-airport-app = "scripts.airport_app:main"
+airport-app = "scripts.keynote_app:main"
 
 [project.urls]
 Repository = "https://github.com/confluentinc/demo-streamhouse-flight-recovery"

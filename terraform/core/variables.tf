@@ -57,3 +57,29 @@ variable "aws_session_token" {
   sensitive   = true
   default     = ""
 }
+
+# AWS credentials for the keynote Tableflow S3/Glue provider integration
+# (terraform/airline-demo/keynote-analytics.tf) — separate from the Bedrock
+# creds above since this needs broader IAM/S3/Glue create permissions, not
+# just bedrock:InvokeModel. Optional, same pattern as Bedrock: leave empty and
+# airline-demo skips enable_keynote_analytics instead of failing.
+variable "aws_tableflow_access_key" {
+  description = "AWS Access Key ID for the keynote Tableflow S3/Glue provider integration (optional)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "aws_tableflow_secret_key" {
+  description = "AWS Secret Access Key for the keynote Tableflow S3/Glue provider integration"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "aws_tableflow_session_token" {
+  description = "AWS Session Token for temporary Tableflow credentials (required when the access key starts with ASIA)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
