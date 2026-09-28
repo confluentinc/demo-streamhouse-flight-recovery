@@ -32,8 +32,9 @@ stops any stream already running, republishes the data, and streams for another 
 quicker rehearsal, add `--skip-history`. `--dry-run` prints the records without publishing, and
 `--reset` writes tombstones for every generated key.
 
-In the app, open RA417, pick a passenger, select the Harbor Hotel offer, and book it. After the
-sellout, the app shows the switch to Park Hotel before the booking succeeds.
+In the app, open RA417 and pick a passenger. **Hotel options** replaces **Biggest delays** and shows
+Harbor Hotel's rooms counting down. Select the Harbor Hotel offer and book it. After the sellout,
+the app shows the switch to Park Hotel before the booking succeeds.
 
 For Demo 3, enable Tableflow on `passenger_recommendations` on screen (Tableflow on `flight_impact`
 is already enabled by Terraform), then run the Athena queries in the [data model](./data-model.md#work-backwards-from-the-questions).

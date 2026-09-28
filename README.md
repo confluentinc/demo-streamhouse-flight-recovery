@@ -25,7 +25,7 @@ That's it. Deploy asks for your Confluent Cloud login and API key, provisions ev
 `uv run airport-app` serves the FastAPI app:
 
 - **Operations:** today's 180 flights with delay and passengers at risk, the biggest delays, and a drill-down into each flight's passengers.
-- **Passenger:** two offers, a select action, hotel substitution when a room sells out, and booking.
+- **Passenger:** two offers, live hotel options in place of the biggest delays, a select action, hotel substitution when a room sells out, and booking.
 
 The browser polls every 2.5 seconds. Lightning credentials stay server-side. With AWS credentials, a recovery agent (Claude on Amazon Bedrock, reading RTCE/MCP) writes the live day's offers; without them, the generator writes the offers. Hotel changes publish directly to Kafka because no Webhooks source connector is deployed yet.
 

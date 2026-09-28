@@ -171,6 +171,13 @@ function statusColorClass(row, phase) {
   return "plane-ok";
 }
 
+// The same color class for callers outside the map (the Operations table's
+// status pills), so a flight's status reads the same color in both places.
+function flightColorClass(row, nowMs = Date.now()) {
+  const pos = planePosition(row, nowMs);
+  return statusColorClass(row, pos ? pos.phase : "enroute");
+}
+
 // Simplified top-down airplane silhouette (nose points "up", i.e. -y, before
 // rotation) plus a halo behind it for contrast against the map.
 const PLANE_SVG = `<circle class="plane-halo" r="10"/><path d="
@@ -254,30 +261,52 @@ function renderInfoBox(svg, row, pos) {
   const planeX = (svgRect.left - wrapRect.left) + (pos.x - view.x) * pxPerUnitX;
   const planeY = (svgRect.top - wrapRect.top) + (pos.y - view.y) * pxPerUnitY;
 
+  const el = (className, text) => {
+    const node = document.createElement("div");
+    node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  // Same thresholds as the rest of the app: delayed from 15 min (the
+  // "Delayed" count), at risk of missed connections from 45.
+  const delay = Number(row.delay_minutes) || 0;
+  const lateClass = delay >= 45 ? "miss" : delay >= 15 ? "tight" : "";
+
   box.innerHTML = "";
-  const title = document.createElement("div");
-  title.className = "infobox-title";
-  title.textContent = row.key;
-  box.appendChild(title);
-  for (const text of [
-    `${row.origin} → ${row.destination}`,
-    `Departure: ${hhmmUTC(pos.departureMs)}`,
-    `Sched. arrival: ${hhmmUTC(pos.scheduledArrivalMs)}`,
-    `Est. arrival: ${hhmmUTC(pos.estimatedArrivalMs)}`,
+  box.appendChild(el("infobox-title", row.key));
+  box.appendChild(el("infobox-route", `${row.origin} → ${row.destination}`));
+  for (const [label, ms, valueClass] of [
+    ["Departure", pos.departureMs, ""],
+    ["Sched. arrival", pos.scheduledArrivalMs, ""],
+    ["Est. arrival", pos.estimatedArrivalMs, lateClass],
   ]) {
-    const line = document.createElement("div");
-    line.textContent = text;
+    const line = el("infobox-row");
+    line.appendChild(el("infobox-label", label));
+    line.appendChild(el(`infobox-value ${valueClass}`.trim(), hhmmUTC(ms)));
     box.appendChild(line);
   }
   box.classList.remove("hidden");
 
-  // Measure the box now that it has real content, and flip to the left/
-  // above if it would run past .map-wrap's own edge.
-  const offset = 18;
-  const goLeft = planeX + offset + box.offsetWidth > wrapRect.width;
-  const goUp = planeY - offset - box.offsetHeight < 0;
-  box.style.left = `${goLeft ? planeX - offset - box.offsetWidth : planeX + offset}px`;
-  box.style.top = `${goUp ? planeY + 14 : planeY - offset - box.offsetHeight}px`;
+  // Measure the box now that it has real content, then take the first spot
+  // around the plane (right-above by default) that stays inside .map-wrap
+  // and doesn't cover the zoom buttons, "Show all flights", or the legend.
+  const w = box.offsetWidth, h = box.offsetHeight, gap = 18;
+  const blockers = [...mapWrap.querySelectorAll(".map-controls, .map-show-all:not(.hidden), .map-legend")]
+    .map((node) => {
+      const r = node.getBoundingClientRect();
+      return { l: r.left - wrapRect.left, t: r.top - wrapRect.top, r: r.right - wrapRect.left, b: r.bottom - wrapRect.top };
+    });
+  const fits = ([x, y]) => x >= 0 && y >= 0 && x + w <= wrapRect.width && y + h <= wrapRect.height
+    && blockers.every((k) => x + w <= k.l || x >= k.r || y + h <= k.t || y >= k.b);
+  const spots = [
+    [planeX + gap, planeY - gap - h],
+    [planeX + gap, planeY + gap],
+    [planeX - gap - w, planeY - gap - h],
+    [planeX - gap - w, planeY + gap],
+  ];
+  const [left, top] = spots.find(fits) || spots[0];
+  box.style.left = `${left}px`;
+  box.style.top = `${top}px`;
 }
 
 // Renders/updates plane markers for `flights` (the same rows /api/state
@@ -402,15 +431,48 @@ function wireZoomPan(svg, container) {
     }));
 }
 
+// Lat/lon lines every 5°, like an aeronautical chart. Drawn in map space so
+// they pan and zoom with everything else.
+function graticulePath() {
+  const d = [];
+  for (let lon = -125; lon <= -65; lon += 5) {
+    const [x] = project([0, lon]);
+    d.push(`M${x.toFixed(1)},0V${MAP_H}`);
+  }
+  for (let lat = 25; lat <= 45; lat += 5) {
+    const [, y] = project([lat, 0]);
+    d.push(`M0,${y.toFixed(1)}H${MAP_W}`);
+  }
+  return d.join("");
+}
+
 function buildMapSvg(svgSelector) {
   const svg = document.querySelector(svgSelector);
   if (!svg || svg.dataset.built) return;
+  const outline = outlinePath();
+  const [hx, hy] = project(AIRPORTS[HUB]);
   svg.innerHTML = `
-    <path class="map-outline" d="${outlinePath()}"></path>
+    <defs>
+      <linearGradient id="map-land" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#13264a"/>
+        <stop offset="1" stop-color="#0b1730"/>
+      </linearGradient>
+      <linearGradient id="map-route" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#22d3ee"/>
+        <stop offset="1" stop-color="#a78bfa"/>
+      </linearGradient>
+    </defs>
+    <path class="map-graticule" d="${graticulePath()}"></path>
+    <path class="map-outline-glow" d="${outline}"></path>
+    <path class="map-outline" d="${outline}"></path>
     ${Object.entries(AIRPORTS).map(([code, coord]) => {
       const [x, y] = project(coord);
-      return `<circle class="map-airport ${code === HUB ? "map-hub" : ""}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${code === HUB ? 4 : 2.2}"></circle>`;
+      return `<circle class="map-airport ${code === HUB ? "map-hub" : ""}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${code === HUB ? 4 : 2.2}"><title>${code}</title></circle>`;
     }).join("")}
+    <circle class="map-hub-ring" cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="4">
+      <animate attributeName="r" values="4;16" dur="2.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values=".8;0" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
     <path id="map-trajectory" class="map-trajectory hidden"></path>
     <g id="map-planes"></g>
   `;
@@ -420,4 +482,4 @@ function buildMapSvg(svgSelector) {
   svg.dataset.built = "1";
 }
 
-window.FlightMap = { buildMapSvg, renderFlightMap };
+window.FlightMap = { buildMapSvg, renderFlightMap, flightColorClass };

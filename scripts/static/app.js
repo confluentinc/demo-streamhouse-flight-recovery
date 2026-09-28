@@ -47,8 +47,8 @@ function hhmm(value) {
   return match ? match[1] : String(value);
 }
 
-const riskClass = (risk) => (risk === "HIGH" ? "MISS" : "other");
-const statusClass = (status) => (status === "DELAYED" ? "TIGHT" : "other");
+const riskClass = (risk) => ({ HIGH: "MISS", OK: "OK" }[risk] || "other");
+const label = (value) => String(value ?? "").replace(/_/g, " "); // ON_TIME -> ON TIME, display only
 
 async function request(path, method = "GET") {
   const response = await fetch(path, { method });
@@ -75,20 +75,35 @@ function flightButton(id) {
 function selectFlight(flightId) {
   // Clicking the already-selected flight again (from the table or the map),
   // or an explicit null (the map's "Show all flights" button), deselects.
+  clearPassenger();
   if (flightId === null || flightId === openFlight) {
     openFlight = null;
-    selected = null;
     $("flight-empty").classList.remove("hidden");
     $("flight-table").classList.add("hidden");
-    $("passenger-card").className = "pax-empty";
-    $("passenger-card").textContent = "Select a passenger.";
     render();
     return;
   }
   openFlight = flightId;
-  selected = null;
   render();
   refreshFlight(true);
+}
+
+// Selecting a passenger swaps Biggest delays for Hotel options (in
+// renderPassenger, once the offers load); clicking the same passenger again,
+// or changing flight, clears it and swaps Biggest delays back.
+function selectPassenger(passengerId) {
+  if (passengerId === selected) clearPassenger();
+  else { selected = passengerId; renderPassenger(); }
+  document.querySelectorAll("[data-passenger]").forEach((button) =>
+    button.closest("tr").classList.toggle("selected", button.dataset.passenger === selected));
+}
+
+function clearPassenger() {
+  selected = null;
+  $("passenger-card").className = "pax-empty";
+  $("passenger-card").textContent = "Select a passenger.";
+  $("hotels-panel").classList.add("hidden");
+  $("delays-panel").classList.remove("hidden");
 }
 
 function bindFlights() {
@@ -120,16 +135,24 @@ function render() {
     : "Lightning Tables";
   if (openFlight) $("flights-show-all").onclick = () => selectFlight(null);
 
-  $("flights").innerHTML = shownFlights.map((row) => `<tr id="flight-row-${esc(row.key)}" class="${row.key === openFlight ? "selected" : ""}">
-    <td>${flightButton(row.key)}</td><td>${esc(row.origin)} → ${esc(row.destination)}</td>
+  // "Biggest impact" is the flight putting the most passengers at risk — not
+  // simply the first row of Biggest delays, which is sorted by minutes and is
+  // often a departure with nobody connecting (0 at risk).
+  const impactKey = current.flights.reduce((best, row) =>
+    row.affected_passengers > (best?.affected_passengers ?? 0) ? row : best, null)?.key;
+  const impactTag = (key) => (key === impactKey ? '<span class="impact-tag">Biggest impact</span>' : "");
+  const rowClass = (key) => [key === openFlight ? "selected" : "", key === impactKey ? "top-delay" : ""].join(" ").trim();
+
+  $("flights").innerHTML = shownFlights.map((row) => `<tr id="flight-row-${esc(row.key)}" class="${rowClass(row.key)}">
+    <td>${flightButton(row.key)}${impactTag(row.key)}</td><td>${esc(row.origin)} → ${esc(row.destination)}</td>
     <td>${esc(hhmm(row.scheduled_time))}</td>
-    <td><span class="risk ${statusClass(row.status)}">${esc(row.status)}</span></td>
+    <td><span class="risk ${FlightMap.flightColorClass(row)}">${esc(label(row.status))}</span></td>
     <td>${esc(row.delay_minutes)}</td><td>${esc(row.affected_passengers)}</td></tr>`).join("");
   shownFlights.forEach((row) =>
     flashIfChanged($(`flight-row-${row.key}`), `flight:${row.key}`, `${row.status}|${row.delay_minutes}|${row.affected_passengers}`));
 
-  $("delays").innerHTML = current.delays.map((row, index) => `<tr id="delay-row-${esc(row.key)}" class="${[row.key === openFlight ? "selected" : "", index === 0 ? "top-delay" : ""].join(" ").trim()}">
-    <td>${flightButton(row.key)}${index === 0 ? '<span class="impact-tag">Biggest impact</span>' : ""}</td>
+  $("delays").innerHTML = current.delays.map((row) => `<tr id="delay-row-${esc(row.key)}" class="${rowClass(row.key)}">
+    <td>${flightButton(row.key)}${impactTag(row.key)}</td>
     <td>${esc(row.origin)} → ${esc(row.destination)}</td>
     <td>${esc(row.delay_minutes)}</td><td>${esc(row.affected_passengers)}</td></tr>`).join("");
   current.delays.forEach((row) =>
@@ -137,7 +160,7 @@ function render() {
 
   bindFlights();
   $("map-show-all").classList.toggle("hidden", !openFlight);
-  FlightMap.renderFlightMap("#flight-map", current.flights, { highlightKey: current.delays[0]?.key, focusedKey: openFlight, onSelect: selectFlight });
+  FlightMap.renderFlightMap("#flight-map", current.flights, { highlightKey: impactKey, focusedKey: openFlight, onSelect: selectFlight });
 }
 
 async function refreshFlight(opening = false) {
@@ -167,14 +190,9 @@ async function refreshFlight(opening = false) {
     <td><button class="link" data-passenger="${esc(row.key)}">${esc(row.key)}</button></td>
     <td>${esc(row.final_destination ?? "—")}</td>
     <td>${esc(row.connecting_flight_id ?? "—")}</td><td>${esc(row.connection_minutes ?? "—")}</td>
-    <td><span class="risk ${riskClass(row.risk)}">${esc(row.risk)}</span></td></tr>`).join("");
+    <td><span class="risk ${riskClass(row.risk)}">${esc(label(row.risk))}</span></td></tr>`).join("");
   document.querySelectorAll("[data-passenger]").forEach((button) =>
-    button.onclick = () => {
-      selected = button.dataset.passenger;
-      document.querySelectorAll("#passengers tr").forEach((row) => row.classList.remove("selected"));
-      button.closest("tr").classList.add("selected");
-      renderPassenger();
-    });
+    button.onclick = () => selectPassenger(button.dataset.passenger));
 }
 
 async function renderPassenger() {
@@ -189,7 +207,7 @@ async function renderPassenger() {
     return;
   }
   if (passengerId !== selected) return;
-  const { passenger, offers } = body;
+  const { passenger, offers, hotels } = body;
   card.className = "pax";
   const facts = [
     ["Inbound", passenger.inbound_flight_id],
@@ -198,7 +216,7 @@ async function renderPassenger() {
     ["Connection minutes", passenger.connection_minutes ?? "—"],
   ].map(([label, value]) => `<div class="fact"><span>${esc(label)}</span><b>${esc(value)}</b></div>`).join("");
   const offerCards = offers.length ? offers.map((offer) => `<div class="offer">
-      <div class="kicker">${esc(offer.recommended_flight_id)} · ${esc(offer.status)}</div>
+      <div class="kicker">${esc(offer.recommended_flight_id)} · ${esc(label(offer.status))}</div>
       <div class="msg">${offer.hotel_name ? esc(offer.hotel_name) : "No hotel needed"}
         ${offer.hotel_cost !== null && offer.hotel_cost !== undefined && offer.hotel_cost !== ""
           ? `<span class="cost"> · $${esc(offer.hotel_cost)}</span>` : ""}</div>
@@ -207,12 +225,37 @@ async function renderPassenger() {
       ${offer.status === "SELECTED" ? `<button class="btn" data-book="${esc(offer.key)}">Book</button>` : ""}</div></div>`).join("")
     : `<div class="pax-empty">No recovery offers.</div>`;
   card.innerHTML = `<div class="pax-id">${esc(passenger.key)}</div>
-    <div class="pax-route"><span class="risk ${riskClass(passenger.risk)}">${esc(passenger.risk)}</span></div>
+    <div class="pax-route"><span class="risk ${riskClass(passenger.risk)}">${esc(label(passenger.risk))}</span></div>
     <div class="facts">${facts}</div>${offerCards}`;
+  renderHotels(hotels, offers);
+  $("delays-panel").classList.add("hidden");
+  $("hotels-panel").classList.remove("hidden");
   document.querySelectorAll("[data-select]").forEach((button) =>
     button.onclick = () => act("select", button.dataset.select));
   document.querySelectorAll("[data-book]").forEach((button) =>
     button.onclick = () => act("book", button.dataset.book));
+}
+
+// Live hotel_inventory rows, cheapest first, each tagged with this passenger's
+// furthest-along offer there, so Harbor Hotel counting down to sold out (+40)
+// is visible before Select swaps in the next hotel with rooms left.
+function renderHotels(hotels, offers) {
+  const rank = { OFFERED: 1, SELECTED: 2, BOOKED: 3 };
+  const offerAt = {};
+  offers.forEach((offer) => {
+    if (offer.hotel_name && (rank[offer.status] || 0) > (rank[offerAt[offer.hotel_name]] || 0)) {
+      offerAt[offer.hotel_name] = offer.status;
+    }
+  });
+  $("hotels").innerHTML = hotels.map((row) => {
+    const rooms = row.available_rooms;
+    const [pill, text] = rooms < 1 ? ["MISS", "Sold out"] : rooms <= 10 ? ["TIGHT", "Few left"] : ["OK", "Available"];
+    const tag = offerAt[row.key] ? `<span class="offer-tag">${esc(label(offerAt[row.key]))}</span>` : "";
+    return `<tr><td>${esc(row.key)}${tag}</td><td>${esc(rooms)}</td><td>$${esc(row.nightly_rate)}</td>
+      <td><span class="risk ${pill}">${text}</span></td></tr>`;
+  }).join("");
+  hotels.forEach((row, index) =>
+    flashIfChanged($("hotels").rows[index], `hotel:${row.key}`, String(row.available_rooms)));
 }
 
 async function act(verb, offerId) {
