@@ -7,12 +7,32 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <header class="topbar"><div class="brand"><div><h1>River Air flight recovery</h1>
+  <header class="topbar"><div class="brand"><span class="dot live-dot" id="live-dot"></span><div><h1>River Air flight recovery</h1>
     <p class="sub">Live flight status, connection risk, and passenger offers (times in UTC)</p></div></div>
     <div class="counts" id="counts"></div></header>
-  <main class="split">
-    <div class="stack">
-      <section class="panel"><div class="panel-head"><h2>Operations</h2><span class="src">Lightning Tables</span></div>
+  <main class="dashboard">
+    <section class="panel map-panel">
+      <div class="panel-head"><h2>Live flight map</h2><span class="src">Positions approximate progress toward/from the SFO hub</span></div>
+      <div class="map-wrap">
+        <svg id="flight-map" class="flight-map"></svg>
+        <div id="map-infobox" class="map-infobox hidden"></div>
+        <div class="map-controls">
+          <button class="map-zoom-btn" data-zoom="in" title="Zoom in">+</button>
+          <button class="map-zoom-btn" data-zoom="out" title="Zoom out">&minus;</button>
+          <button class="map-zoom-btn" data-zoom="reset" title="Reset view">&#8634;</button>
+        </div>
+        <button id="map-show-all" class="ghost map-show-all hidden">&#9664; Show all flights</button>
+        <div class="map-legend">
+          <span class="legend-item"><i class="legend-dot plane-ok"></i>On time</span>
+          <span class="legend-item"><i class="legend-dot plane-tight"></i>Delayed</span>
+          <span class="legend-item"><i class="legend-dot plane-miss"></i>At risk</span>
+          <span class="legend-item"><i class="legend-dot plane-waiting"></i>At gate</span>
+          <span class="legend-item"><i class="legend-dot plane-done"></i>Landed/departed</span>
+        </div>
+      </div>
+    </section>
+    <div class="data-rail">
+      <section class="panel"><div class="panel-head"><h2>Operations</h2><span class="src" id="flights-src">Lightning Tables</span></div>
         <div class="table-wrap scroll"><table><thead><tr><th>Flight</th><th>Route</th><th>Scheduled</th><th>Status</th>
           <th>Delay (min)</th><th>At risk</th></tr></thead>
         <tbody id="flights"></tbody></table></div>
@@ -23,8 +43,6 @@
           <th>Connection</th><th>Minutes</th><th>Risk</th></tr></thead>
         <tbody id="passengers"></tbody></table></div>
       </section>
-    </div>
-    <div class="stack">
       <section class="panel"><div class="panel-head"><h2>Biggest delays</h2></div>
         <div class="table-wrap"><table><thead><tr><th>Flight</th><th>Route</th><th>Delay (min)</th><th>At risk</th></tr></thead>
         <tbody id="delays"></tbody></table></div>
@@ -34,6 +52,7 @@
     </div>
   </main>
   <footer class="foot"><span id="status-line">Loading…</span><button id="refresh" class="ghost">Refresh</button></footer>
+  <script src="/static/flightmap.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

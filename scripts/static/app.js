@@ -1,11 +1,43 @@
 "use strict";
 
+FlightMap.buildMapSvg("#flight-map");
+
 const $ = (id) => document.getElementById(id);
 let current = { flights: [], delays: [], counts: {} };
 let openFlight = null;
 let selected = null;
+let lastUpdated = null;
+const rowWatermarks = new Map(); // key -> "status|delay_minutes|affected_passengers", for flash-on-change
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+
+// Tweens a big number from its last rendered value to `to` so every 2.5s poll
+// feels alive rather than silently jumping — the "engaging, real-time" cue.
+function animateNumber(el, to, duration = 600) {
+  to = Number(to) || 0;
+  const from = Number(el.dataset.value || 0);
+  if (from === to) { el.textContent = to; el.dataset.value = to; return; }
+  const start = performance.now();
+  el.dataset.value = to;
+  (function step(now) {
+    const progress = Math.min(1, (now - start) / duration);
+    el.textContent = Math.round(from + (to - from) * (1 - Math.pow(1 - progress, 3)));
+    if (progress < 1) requestAnimationFrame(step);
+  })(start);
+}
+
+// Briefly flashes a row when a watched field changes between polls, so a
+// status/delay/at-risk update is visible, not just quietly redrawn.
+function flashIfChanged(rowEl, watchKey, watermark) {
+  const previous = rowWatermarks.get(watchKey);
+  if (previous !== undefined && previous !== watermark) {
+    rowEl.classList.remove("flash");
+    // eslint-disable-next-line no-unused-expressions
+    rowEl.offsetWidth; // restart the CSS animation
+    rowEl.classList.add("flash");
+  }
+  rowWatermarks.set(watchKey, watermark);
+}
 
 // Lightning returns timestamps like "2026-09-25 01:00:00.000000" (UTC); show HH:MM.
 function hhmm(value) {
@@ -28,6 +60,7 @@ async function request(path, method = "GET") {
 async function refresh() {
   try {
     current = await request("/api/state");
+    lastUpdated = Date.now();
     render();
     $("status-line").textContent = "Live from Lightning Tables";
   } catch (error) {
@@ -39,29 +72,75 @@ function flightButton(id) {
   return `<button class="link" data-flight="${esc(id)}">${esc(id)}</button>`;
 }
 
+function selectFlight(flightId) {
+  // Clicking the already-selected flight again (from the table or the map),
+  // or an explicit null (the map's "Show all flights" button), deselects.
+  if (flightId === null || flightId === openFlight) {
+    openFlight = null;
+    selected = null;
+    $("flight-empty").classList.remove("hidden");
+    $("flight-table").classList.add("hidden");
+    $("passenger-card").className = "pax-empty";
+    $("passenger-card").textContent = "Select a passenger.";
+    render();
+    return;
+  }
+  openFlight = flightId;
+  selected = null;
+  render();
+  refreshFlight(true);
+}
+
 function bindFlights() {
   document.querySelectorAll("[data-flight]").forEach((button) =>
-    button.onclick = () => { openFlight = button.dataset.flight; render(); refreshFlight(); });
+    button.onclick = () => selectFlight(button.dataset.flight));
 }
 
 function render() {
   const counts = current.counts || {};
-  $("counts").innerHTML = `<div class="count"><b>${esc(counts.flights ?? 0)}</b><span>Flights today</span></div>
-    <div class="count tight"><b>${esc(counts.delayed ?? 0)}</b><span>Delayed</span></div>
-    <div class="count miss"><b>${esc(counts.affected ?? 0)}</b><span>Passengers at risk</span></div>
-    <div class="count ok"><b>${esc(counts.booked ?? 0)}</b><span>Booked</span></div>`;
-  $("flights").innerHTML = current.flights.map((row) => `<tr class="${row.key === openFlight ? "selected" : ""}">
+  if (!$("counts").dataset.built) {
+    $("counts").innerHTML = `
+      <div class="count"><b id="count-flights" data-value="0">0</b><span>Flights today</span></div>
+      <div class="count tight"><b id="count-delayed" data-value="0">0</b><span>Delayed</span></div>
+      <div class="count miss"><b id="count-affected" data-value="0">0</b><span>Passengers at risk</span></div>
+      <div class="count ok"><b id="count-booked" data-value="0">0</b><span>Booked</span></div>`;
+    $("counts").dataset.built = "1";
+  }
+  animateNumber($("count-flights"), counts.flights ?? 0);
+  animateNumber($("count-delayed"), counts.delayed ?? 0);
+  animateNumber($("count-affected"), counts.affected ?? 0);
+  animateNumber($("count-booked"), counts.booked ?? 0);
+
+  // Selecting a flight (map or table) filters this table down to it, same
+  // as the map hiding every other plane — both reflect the one shared
+  // openFlight selection, not two independent states.
+  const shownFlights = openFlight ? current.flights.filter((row) => row.key === openFlight) : current.flights;
+  $("flights-src").innerHTML = openFlight
+    ? `Filtered to 1 of ${current.flights.length} · <button class="link" id="flights-show-all">Show all</button>`
+    : "Lightning Tables";
+  if (openFlight) $("flights-show-all").onclick = () => selectFlight(null);
+
+  $("flights").innerHTML = shownFlights.map((row) => `<tr id="flight-row-${esc(row.key)}" class="${row.key === openFlight ? "selected" : ""}">
     <td>${flightButton(row.key)}</td><td>${esc(row.origin)} → ${esc(row.destination)}</td>
     <td>${esc(hhmm(row.scheduled_time))}</td>
     <td><span class="risk ${statusClass(row.status)}">${esc(row.status)}</span></td>
     <td>${esc(row.delay_minutes)}</td><td>${esc(row.affected_passengers)}</td></tr>`).join("");
-  $("delays").innerHTML = current.delays.map((row) => `<tr class="${row.key === openFlight ? "selected" : ""}">
-    <td>${flightButton(row.key)}</td><td>${esc(row.origin)} → ${esc(row.destination)}</td>
+  shownFlights.forEach((row) =>
+    flashIfChanged($(`flight-row-${row.key}`), `flight:${row.key}`, `${row.status}|${row.delay_minutes}|${row.affected_passengers}`));
+
+  $("delays").innerHTML = current.delays.map((row, index) => `<tr id="delay-row-${esc(row.key)}" class="${[row.key === openFlight ? "selected" : "", index === 0 ? "top-delay" : ""].join(" ").trim()}">
+    <td>${flightButton(row.key)}${index === 0 ? '<span class="impact-tag">Biggest impact</span>' : ""}</td>
+    <td>${esc(row.origin)} → ${esc(row.destination)}</td>
     <td>${esc(row.delay_minutes)}</td><td>${esc(row.affected_passengers)}</td></tr>`).join("");
+  current.delays.forEach((row) =>
+    flashIfChanged($(`delay-row-${row.key}`), `delay:${row.key}`, `${row.delay_minutes}|${row.affected_passengers}`));
+
   bindFlights();
+  $("map-show-all").classList.toggle("hidden", !openFlight);
+  FlightMap.renderFlightMap("#flight-map", current.flights, { highlightKey: current.delays[0]?.key, focusedKey: openFlight, onSelect: selectFlight });
 }
 
-async function refreshFlight() {
+async function refreshFlight(opening = false) {
   if (!openFlight) return;
   const flightId = openFlight;
   let body;
@@ -78,6 +157,12 @@ async function refreshFlight() {
     + `${flight.delay_minutes} min delay · est. ${hhmm(flight.estimated_time)}`;
   $("flight-empty").classList.add("hidden");
   $("flight-table").classList.remove("hidden");
+  if (opening) {
+    $("flight-table").classList.remove("reveal");
+    // eslint-disable-next-line no-unused-expressions
+    $("flight-table").offsetWidth; // restart the CSS animation
+    $("flight-table").classList.add("reveal");
+  }
   $("passengers").innerHTML = passengers.map((row) => `<tr class="${row.key === selected ? "selected" : ""}">
     <td><button class="link" data-passenger="${esc(row.key)}">${esc(row.key)}</button></td>
     <td>${esc(row.final_destination ?? "—")}</td>
@@ -140,7 +225,14 @@ async function act(verb, offerId) {
   }
 }
 
+function tickLiveDot() {
+  if (!lastUpdated) return;
+  $("live-dot").classList.toggle("stale", Date.now() - lastUpdated > 6000);
+}
+
 $("refresh").onclick = () => { refresh(); refreshFlight(); renderPassenger(); };
+$("map-show-all").onclick = () => selectFlight(null);
 refresh();
 window.setInterval(refresh, 2500);
 window.setInterval(() => { refreshFlight(); renderPassenger(); }, 5000);
+window.setInterval(tickLiveDot, 1000);

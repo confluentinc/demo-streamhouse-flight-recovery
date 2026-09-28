@@ -14,16 +14,21 @@
 
 * { box-sizing: border-box; }
 
+html, body { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* full-screen dashboard: map + data both fit without page scroll */
 }
 
 code { color: #cdd7ff; background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
 .topbar {
+  flex: 0 0 auto;
   display: flex; justify-content: space-between; align-items: center;
   padding: 16px 22px; border-bottom: 1px solid var(--line); gap: 16px; flex-wrap: wrap;
 }
@@ -63,8 +68,45 @@ code { color: #cdd7ff; background: var(--chip); padding: 1px 5px; border-radius:
   letter-spacing: .04em;
 }
 
-.split { display: grid; grid-template-columns: 1.7fr 1fr; gap: 16px; padding: 16px 22px; align-items: start; }
-@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+.dashboard {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; gap: 16px; padding: 16px 22px;
+}
+.map-panel { flex: 1 1 0; min-width: 320px; display: flex; flex-direction: column; min-height: 0; }
+.data-rail {
+  flex: 1.7 1 0; min-width: 620px; max-width: 800px;
+  display: flex; flex-direction: column; gap: 16px;
+  overflow-y: auto; min-height: 0;
+}
+/* Flex's default flex-shrink:1 was squeezing these panels below their own
+   content height whenever .data-rail's own height became content-driven
+   (the narrow/stacked layout below) — and since .panel has overflow:hidden,
+   that squeeze silently clipped whichever rows didn't fit, rather than
+   scrolling. Panels should size to their content and let .data-rail's own
+   overflow-y handle anything taller than the viewport. */
+.data-rail > .panel { flex-shrink: 0; }
+@media (max-width: 1000px) {
+  /* Drop out of the full-viewport flex-column lock entirely, on both body
+     AND .dashboard/.data-rail: a flex container sized by height:auto still
+     doesn't reliably size to flex-basis:0 children's real content (a known
+     flexbox edge case) — .dashboard came out shorter than its own content,
+     so the overflow spilled past its bottom edge while .foot (the next
+     *flex* sibling in body) stayed put at that box's edge, landing the
+     footer mid-page on top of the spillover. Plain block flow for the
+     whole stack sidesteps that ambiguity rather than fighting it. */
+  body { display: block; height: auto; overflow: auto; }
+  .dashboard { display: block; height: auto; overflow: visible; padding: 16px 22px; }
+  .map-panel { min-width: 0; min-height: 420px; margin-bottom: 16px; }
+  /* Un-set the desktop side-by-side sizing entirely — stacked, each panel
+     should just take the full (now-narrow) width, not still demand 620px
+     and get clipped. Individual tables still scroll horizontally via
+     .table-wrap if a row is wider than that. */
+  .data-rail {
+    display: block; min-width: 0; max-width: none; overflow: visible;
+  }
+  .data-rail > .panel { margin-bottom: 16px; }
+  .data-rail > .panel:last-child { margin-bottom: 0; }
+}
 @media (max-width: 700px) {
   .live-update { align-items: flex-start; flex-direction: column; }
 }
@@ -118,12 +160,127 @@ td .pax-key { display: block; margin-top: 1px; }
 .offer .foot-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 /* Flight recovery layout */
-.stack { display: grid; gap: 16px; align-content: start; min-width: 0; }
-.scroll { max-height: 460px; overflow-y: auto; }
+.scroll { max-height: 260px; overflow-y: auto; }
 .hidden { display: none; }
 .link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
 .link:hover { text-decoration: underline; }
 .offer + .offer { margin-top: 10px; }
 .offer .cost { color: var(--muted); font-size: 12.5px; }
 
-.foot { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+.foot { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 12px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+
+/* --- Motion: live pulse, flash-on-change, biggest-impact glow, drill-down reveal --- */
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 4px var(--accent); opacity: 1; }
+  50% { box-shadow: 0 0 16px var(--accent); opacity: .55; }
+}
+.live-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+.live-dot.stale { background: var(--tight); animation: none; box-shadow: 0 0 8px var(--tight); }
+
+@keyframes row-flash {
+  0% { background: rgba(79,140,255,.28); }
+  100% { background: transparent; }
+}
+tbody tr.flash { animation: row-flash 1.1s ease-out; }
+
+tbody tr.top-delay {
+  box-shadow: inset 3px 0 0 0 var(--miss), 0 0 18px rgba(255,90,106,.12);
+  background: rgba(255,90,106,.07);
+}
+.impact-tag {
+  display: inline-block; margin-left: 8px; color: var(--miss); background: rgba(255,90,106,.14);
+  border: 1px solid rgba(255,90,106,.35); border-radius: 999px; padding: 2px 8px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.table-wrap.reveal { animation: reveal .3s ease-out; }
+
+/* --- Live flight map --- */
+
+.map-wrap { position: relative; padding: 14px 16px 16px; flex: 1 1 auto; min-height: 320px; display: flex; flex-direction: column; }
+/* No fixed aspect-ratio here (unlike a stacked layout): the panel's height is
+   whatever the flex row gives it, and the SVG's own viewBox + default
+   preserveAspectRatio keeps the map undistorted (letterboxed) inside that. */
+.flight-map { width: 100%; flex: 1 1 auto; min-height: 0; display: block; touch-action: none; }
+.flight-map.dragging { cursor: grabbing; }
+
+.map-outline {
+  fill: rgba(79,140,255,.06); stroke: var(--line); stroke-width: 1.5;
+}
+.map-airport { fill: var(--muted); opacity: .55; }
+.map-airport.map-hub { fill: var(--accent); opacity: 1; }
+
+.plane {
+  cursor: pointer;
+}
+.plane path { stroke: var(--bg); stroke-width: 1; }
+.plane-halo { fill: var(--bg); opacity: .55; }
+.plane.plane-ok path { fill: var(--ok); }
+.plane.plane-tight path { fill: var(--tight); }
+.plane.plane-miss path { fill: var(--miss); }
+.plane.plane-waiting path { fill: var(--accent); opacity: .9; }
+.plane.plane-done path { fill: var(--muted); opacity: .6; }
+.plane.plane-done .plane-halo { opacity: .25; }
+
+@keyframes plane-glow {
+  0%, 100% { filter: drop-shadow(0 0 2px currentColor); }
+  50% { filter: drop-shadow(0 0 7px currentColor); }
+}
+.plane.plane-highlight { animation: plane-glow 1.4s ease-in-out infinite; color: var(--miss); }
+.plane.plane-selected path { stroke: var(--text); stroke-width: 1.4; }
+.plane.plane-focused { animation: plane-glow 1.4s ease-in-out infinite; color: var(--accent); }
+.plane-hidden { display: none; }
+
+.map-trajectory {
+  fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5;
+  opacity: .85;
+}
+.map-trajectory.hidden { display: none; }
+@keyframes trajectory-flow { to { stroke-dashoffset: -22; } }
+.map-trajectory:not(.hidden) { animation: trajectory-flow 1s linear infinite; }
+
+/* A real HTML overlay (see flightmap.js renderInfoBox), not SVG text — so
+   its font sizes are normal CSS pixels, matching the rest of the dashboard
+   exactly, instead of being squeezed by the SVG's own viewBox-to-panel and
+   zoom scaling the way SVG <text> would be. */
+.map-infobox {
+  position: absolute; z-index: 2; min-width: 190px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 13px; box-shadow: 0 4px 10px rgba(0,0,0,.4);
+  font-size: 13.5px; line-height: 1.5; color: var(--text);
+  pointer-events: none;
+}
+.map-infobox .infobox-title { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+.map-infobox.hidden { display: none; }
+
+.map-controls {
+  position: absolute; top: 26px; right: 22px; display: flex; flex-direction: column; gap: 4px;
+}
+.map-zoom-btn {
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 15px; line-height: 1;
+}
+.map-zoom-btn:hover { border-color: var(--accent); }
+
+.map-show-all {
+  position: absolute; top: 26px; left: 26px;
+}
+.map-show-all.hidden { display: none; }
+
+.map-legend {
+  flex: 0 0 auto;
+  display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
+  font-size: 12px; color: var(--muted);
+}
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.legend-dot.plane-ok { background: var(--ok); }
+.legend-dot.plane-tight { background: var(--tight); }
+.legend-dot.plane-miss { background: var(--miss); }
+.legend-dot.plane-waiting { background: var(--accent); }
+.legend-dot.plane-done { background: var(--muted); }
