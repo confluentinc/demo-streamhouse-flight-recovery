@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """
-Workshop Key Manager — create and manage scoped AWS Bedrock credentials for workshops.
+Workshop Key Manager — create and manage scoped AWS credentials for workshops.
 
-Lets a workshop organizer mint an invoke-only Bedrock IAM user + access keys so
-participants can run the recovery streaming agent without full cloud permissions.
-The credentials go into API-KEYS-AWS.md; paste the access key / secret into
-credentials.env (TF_VAR_aws_bedrock_access_key / _secret_key) before `uv run deploy`.
+Lets a workshop organizer mint one AWS IAM user + access key pair, scoped to
+exactly what this demo uses that key for:
+  1. Bedrock model invocation, for the recovery streaming agent.
+  2. Provisioning the keynote Tableflow-to-S3/Glue path (Demo 3): an S3
+     bucket, a cross-account IAM role, and its S3 + Glue Data Catalog
+     policies (terraform/airline-demo/keynote-analytics.tf).
+
+deploy.py writes this same key/secret into both TF_VAR_aws_bedrock_* and
+TF_VAR_aws_tableflow_* (both features use one identity in a demo), so the
+IAM policy here grants the union of what both paths need. The credentials
+go into API-KEYS-AWS.md; paste the access key / secret into credentials.env
+before `uv run deploy`.
 
 This repo is AWS-only by design (RTCE + Flink Native Inference are AWS-only).
 
 Usage:
-    uv run api-keys create            # Create AWS Bedrock workshop credentials -> API-KEYS-AWS.md
+    uv run api-keys create            # Create AWS workshop credentials -> API-KEYS-AWS.md
     uv run api-keys create --verbose
     uv run api-keys destroy           # Revoke them
     uv run api-keys destroy --keep-user   # Revoke keys but keep the IAM user for reuse
@@ -35,6 +43,7 @@ except ImportError:
 
 from dotenv import dotenv_values, set_key
 
+from .deploy import DEFAULT_PREFIX
 from .logging_utils import setup_logging
 from .terraform import get_project_root
 from .ui import prompt_choice, prompt_with_default
@@ -46,8 +55,8 @@ from .ui import prompt_choice, prompt_with_default
 PROJECT_URL = "https://github.com/confluentinc/streamhouse-demo"
 
 # AWS Constants
-AWS_IAM_USERNAME = "workshop-bedrock-user"
-AWS_POLICY_NAME = "BedrockInvokeOnly"
+AWS_IAM_USERNAME = "workshop-demo-user"
+AWS_POLICY_NAME = "StreamhouseDemoAccess"
 AWS_CREDENTIALS_FILE = "API-KEYS-AWS.md"
 
 
@@ -97,19 +106,133 @@ def get_owner_email(project_root: Path) -> str:
     return email
 
 
-def get_bedrock_policy() -> dict:
-    """Get the IAM policy document for Bedrock model invocation."""
+def get_resource_prefix(project_root: Path) -> str:
+    """Get TF_VAR_resource_prefix from credentials.env, or the deploy default."""
+    creds_file = project_root / "credentials.env"
+    if creds_file.exists():
+        creds = dotenv_values(creds_file)
+        if creds.get("TF_VAR_resource_prefix"):
+            return creds["TF_VAR_resource_prefix"].strip("'\"")
+    return DEFAULT_PREFIX
+
+
+def get_demo_policy(account_id: str, region: str, resource_prefix: str) -> dict:
+    """IAM policy covering exactly what this demo's one AWS key is used for:
+
+    1. Bedrock model invocation (terraform/core/main.tf bedrock_connection) —
+       used directly by Confluent's managed connection, not scoped further.
+    2. Provisioning the keynote Tableflow-to-S3/Glue path (Demo 3, optional):
+       an S3 bucket, a cross-account IAM role, and its S3 + Glue policies
+       (terraform/airline-demo/keynote-analytics.tf). The random suffix
+       terraform appends to resource names isn't known until apply, so these
+       are scoped by the `{resource_prefix}-*-...` naming convention instead
+       of exact names.
+    """
+    bucket_pattern = f"{resource_prefix}-*-keynote-analytics"
+    role_pattern = f"{resource_prefix}-*-tableflow-glue"
+    policy_pattern = f"{role_pattern}-*"  # -s3-access / -glue-access
+
     return {
         "Version": "2012-10-17",
         "Statement": [
             {
+                "Sid": "BedrockInvoke",
                 "Effect": "Allow",
                 "Action": [
                     "bedrock:InvokeModel",
                     "bedrock:InvokeModelWithResponseStream",
                 ],
                 "Resource": "*",
-            }
+            },
+            {
+                "Sid": "CallerIdentity",
+                "Effect": "Allow",
+                "Action": "sts:GetCallerIdentity",
+                "Resource": "*",
+            },
+            {
+                "Sid": "TableflowBucket",
+                "Effect": "Allow",
+                "Action": [
+                    "s3:CreateBucket",
+                    "s3:DeleteBucket",
+                    "s3:GetBucketLocation",
+                    "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads",
+                ],
+                "Resource": f"arn:aws:s3:::{bucket_pattern}",
+            },
+            {
+                "Sid": "TableflowBucketObjects",
+                "Effect": "Allow",
+                "Action": [
+                    "s3:PutObject",
+                    "s3:PutObjectTagging",
+                    "s3:GetObject",
+                    "s3:DeleteObject",
+                    "s3:AbortMultipartUpload",
+                    "s3:ListMultipartUploadParts",
+                ],
+                "Resource": f"arn:aws:s3:::{bucket_pattern}/*",
+            },
+            {
+                "Sid": "TableflowIamRole",
+                "Effect": "Allow",
+                "Action": [
+                    "iam:CreateRole",
+                    "iam:GetRole",
+                    "iam:DeleteRole",
+                    "iam:AttachRolePolicy",
+                    "iam:DetachRolePolicy",
+                    "iam:ListAttachedRolePolicies",
+                    "iam:ListRolePolicies",
+                    "iam:TagRole",
+                ],
+                "Resource": f"arn:aws:iam::{account_id}:role/{role_pattern}",
+            },
+            {
+                "Sid": "TableflowIamPolicy",
+                "Effect": "Allow",
+                "Action": [
+                    "iam:CreatePolicy",
+                    "iam:GetPolicy",
+                    "iam:DeletePolicy",
+                    "iam:GetPolicyVersion",
+                    "iam:ListPolicyVersions",
+                    "iam:CreatePolicyVersion",
+                    "iam:DeletePolicyVersion",
+                ],
+                "Resource": f"arn:aws:iam::{account_id}:policy/{policy_pattern}",
+            },
+            {
+                "Sid": "TableflowGlueCatalog",
+                "Effect": "Allow",
+                "Action": [
+                    "glue:GetDatabase",
+                    "glue:GetDatabases",
+                    "glue:CreateDatabase",
+                    "glue:UpdateDatabase",
+                    "glue:DeleteDatabase",
+                    "glue:GetTable",
+                    "glue:GetTables",
+                    "glue:CreateTable",
+                    "glue:UpdateTable",
+                    "glue:DeleteTable",
+                    "glue:GetPartition",
+                    "glue:GetPartitions",
+                    "glue:BatchGetPartition",
+                    "glue:CreatePartition",
+                    "glue:BatchCreatePartition",
+                    "glue:UpdatePartition",
+                    "glue:DeletePartition",
+                    "glue:BatchDeletePartition",
+                ],
+                "Resource": [
+                    f"arn:aws:glue:{region}:{account_id}:catalog",
+                    f"arn:aws:glue:{region}:{account_id}:database/*",
+                    f"arn:aws:glue:{region}:{account_id}:table/*",
+                ],
+            },
         ],
     }
 
@@ -147,13 +270,18 @@ def create_or_get_iam_user(
             raise
 
 
-def attach_bedrock_policy(
-    iam_client, logger: logging.Logger, username: str = AWS_IAM_USERNAME
+def attach_demo_policy(
+    iam_client,
+    logger: logging.Logger,
+    account_id: str,
+    region: str,
+    resource_prefix: str,
+    username: str = AWS_IAM_USERNAME,
 ) -> None:
-    """Attach inline Bedrock policy to IAM user."""
-    logger.info(f"Attaching Bedrock policy '{AWS_POLICY_NAME}'...")
+    """Attach the inline demo policy (Bedrock invoke + Tableflow S3/Glue provisioning) to the IAM user."""
+    logger.info(f"Attaching policy '{AWS_POLICY_NAME}'...")
 
-    policy_doc = get_bedrock_policy()
+    policy_doc = get_demo_policy(account_id, region, resource_prefix)
 
     iam_client.put_user_policy(
         UserName=username,
@@ -213,6 +341,7 @@ def save_aws_credentials_file(
     access_key_id: str,
     secret_access_key: str,
     region: str,
+    resource_prefix: str,
     tags: dict[str, str],
     logger: logging.Logger,
     username: str = AWS_IAM_USERNAME,
@@ -227,9 +356,11 @@ def save_aws_credentials_file(
 
     content = f"""# Workshop Credentials (AWS)
 
-## AWS Bedrock Access Keys
+## AWS Access Keys
 
-Use these credentials when running `uv run deploy`:
+Use these credentials when running `uv run deploy`. The same key powers both
+the recovery streaming agent (Bedrock) and the keynote Tableflow S3/Glue
+analytics path (Demo 3) — both optional, both skipped if you leave this blank.
 
 ```
 AWS Access Key ID:     {access_key_id}
@@ -252,13 +383,15 @@ AWS Secret Access Key: {secret_access_key}
    ```
 
 3. When prompted, enter the credentials above:
-   - AWS Bedrock Access Key: `{access_key_id}`
-   - AWS Bedrock Secret Key: `{secret_access_key}`
+   - AWS Access Key: `{access_key_id}`
+   - AWS Secret Key: `{secret_access_key}`
 
 ## Security Notes
 
 - **Do NOT commit these credentials to Git**
-- These keys have minimal permissions (Bedrock model invocation only)
+- These keys are scoped to exactly this demo: Bedrock model invocation, plus
+  creating/destroying the S3 bucket, IAM role, and Glue Data Catalog entries
+  named `{resource_prefix}-*` (the Tableflow-to-S3/Glue path)
 - Keys should be revoked immediately after the workshop
 - Each participant will use the same shared credentials
 
@@ -290,8 +423,14 @@ The api-keys destroy command will:
 
 **IAM User:** `{username}`
 **Region:** `{region}`
+**Resource prefix scope:** `{resource_prefix}-*`
 **Policy:** `{AWS_POLICY_NAME}` (inline policy)
-**Permissions:** `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`
+**Permissions:**
+- `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` (unscoped)
+- `sts:GetCallerIdentity` (unscoped)
+- S3 create/read/write/delete on bucket `{resource_prefix}-*-keynote-analytics`
+- IAM create/read/delete on role `{resource_prefix}-*-tableflow-glue` and its policies
+- Glue Data Catalog CRUD on this account's catalog/databases/tables
 
 **Tags:**
 {tags_display}
@@ -304,13 +443,16 @@ The api-keys destroy command will:
 
     logger.info(f"✓ Saved credentials to {creds_file}")
 
-    # Also update credentials.env if it exists
+    # Also update credentials.env if it exists. One key covers both Bedrock and
+    # Tableflow (see module docstring), matching deploy.py's dual write.
     env_file = project_root / "credentials.env"
     if env_file.exists():
-        set_key(str(env_file), "TF_VAR_aws_bedrock_access_key", access_key_id)
-        set_key(str(env_file), "TF_VAR_aws_bedrock_secret_key", secret_access_key)
+        for name in ("aws_bedrock_access_key", "aws_tableflow_access_key"):
+            set_key(str(env_file), f"TF_VAR_{name}", access_key_id)
+        for name in ("aws_bedrock_secret_key", "aws_tableflow_secret_key"):
+            set_key(str(env_file), f"TF_VAR_{name}", secret_access_key)
         set_key(str(env_file), "TF_VAR_aws_iam_username", username)
-        logger.info("✓ Updated credentials.env with new AWS Bedrock credentials")
+        logger.info("✓ Updated credentials.env with new AWS credentials")
 
 
 def parse_iam_username_from_md(project_root: Path) -> str | None:
@@ -619,6 +761,7 @@ def create_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int:
         # Get owner email and region
         owner_email = get_owner_email(project_root)
         region = get_aws_region(project_root)
+        resource_prefix = get_resource_prefix(project_root)
 
         # Build tags
         tags = get_tags(project_root, owner_email)
@@ -630,6 +773,7 @@ def create_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int:
 
         # Create IAM client (uses default AWS credentials from environment/config)
         iam_client = boto3.client("iam")
+        account_id = boto3.client("sts").get_caller_identity()["Account"]
 
         print("\n" + "=" * 70)
         print("CREATING AWS WORKSHOP CREDENTIALS")
@@ -640,7 +784,14 @@ def create_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int:
             create_or_get_iam_user(iam_client, tags, logger, username=iam_username)
 
             # Attach policy
-            attach_bedrock_policy(iam_client, logger, username=iam_username)
+            attach_demo_policy(
+                iam_client,
+                logger,
+                account_id=account_id,
+                region=region,
+                resource_prefix=resource_prefix,
+                username=iam_username,
+            )
 
             # Create access key (may raise MaxKeysReached)
             try:
@@ -702,6 +853,7 @@ def create_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int:
             access_key_id,
             secret_access_key,
             region,
+            resource_prefix,
             tags,
             logger,
             username=iam_username,
@@ -854,6 +1006,8 @@ def destroy_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int
 
             unset_key(str(env_file), "TF_VAR_aws_bedrock_access_key")
             unset_key(str(env_file), "TF_VAR_aws_bedrock_secret_key")
+            unset_key(str(env_file), "TF_VAR_aws_tableflow_access_key")
+            unset_key(str(env_file), "TF_VAR_aws_tableflow_secret_key")
             unset_key(str(env_file), "TF_VAR_aws_iam_username")
         legacy_state = project_root / ".workshop-keys-state-aws.json"
         if legacy_state.exists():
@@ -896,13 +1050,13 @@ def destroy_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int
 
 
 def main():
-    """Create or revoke scoped AWS Bedrock workshop credentials (AWS-only)."""
+    """Create or revoke scoped AWS workshop credentials (AWS-only)."""
     parser = argparse.ArgumentParser(
-        description="Create and manage scoped AWS Bedrock workshop credentials",
+        description="Create and manage scoped AWS workshop credentials (Bedrock + Tableflow S3/Glue)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s create              # Create AWS Bedrock credentials -> API-KEYS-AWS.md
+  %(prog)s create              # Create AWS credentials -> API-KEYS-AWS.md
   %(prog)s create --verbose
   %(prog)s destroy             # Revoke the access keys
   %(prog)s destroy --keep-user # Revoke keys but keep the IAM user for reuse
@@ -912,7 +1066,7 @@ Examples:
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
 
     create_parser = subparsers.add_parser(
-        "create", help="Create AWS Bedrock workshop credentials"
+        "create", help="Create AWS workshop credentials"
     )
     # `cloud` kept as an optional, AWS-only positional for backward compatibility
     # with `api-keys create aws`; hidden from help since AWS is the only option.
@@ -924,7 +1078,7 @@ Examples:
     )
 
     destroy_parser = subparsers.add_parser(
-        "destroy", help="Revoke AWS Bedrock workshop credentials"
+        "destroy", help="Revoke AWS workshop credentials"
     )
     destroy_parser.add_argument(
         "cloud", nargs="?", choices=["aws"], default="aws", help=argparse.SUPPRESS
