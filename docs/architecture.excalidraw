@@ -97,6 +97,10 @@
         {
           "id": "a_ops",
           "type": "arrow"
+        },
+        {
+          "id": "a_state_impact",
+          "type": "arrow"
         }
       ],
       "updated": 1780000000000,
@@ -204,6 +208,50 @@
     {
       "angle": 0,
       "strokeColor": "#1e1e1e",
+      "backgroundColor": "#ffec99",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [
+        "flight_impact_group"
+      ],
+      "frameId": null,
+      "roundness": {
+        "type": 3
+      },
+      "seed": 1001,
+      "version": 1,
+      "versionNonce": 6001,
+      "isDeleted": false,
+      "boundElements": [
+        {
+          "id": "a_state_impact",
+          "type": "arrow"
+        },
+        {
+          "id": "a_impact_dash",
+          "type": "arrow"
+        },
+        {
+          "id": "a_impact_analytics",
+          "type": "arrow"
+        }
+      ],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "flight_impact",
+      "type": "rectangle",
+      "x": 820.453125,
+      "y": 185.0,
+      "width": 250,
+      "height": 130
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
       "backgroundColor": "#fcc2d7",
       "fillStyle": "solid",
       "strokeWidth": 2,
@@ -225,6 +273,10 @@
         {
           "id": "a_hotel_agent",
           "type": "arrow"
+        },
+        {
+          "id": "a_hotel_app",
+          "type": "arrow"
         }
       ],
       "updated": 1780000000000,
@@ -232,9 +284,9 @@
       "locked": false,
       "id": "hotel_inventory",
       "type": "rectangle",
-      "x": 808.984375,
+      "x": 789.953125,
       "y": 700.0,
-      "width": 272.9375,
+      "width": 311.0,
       "height": 100
     },
     {
@@ -264,6 +316,10 @@
         },
         {
           "id": "a_recs_dash",
+          "type": "arrow"
+        },
+        {
+          "id": "a_impact_dash",
           "type": "arrow"
         }
       ],
@@ -301,6 +357,10 @@
         {
           "id": "a_agents",
           "type": "arrow"
+        },
+        {
+          "id": "a_hotel_app",
+          "type": "arrow"
         }
       ],
       "updated": 1780000000000,
@@ -336,6 +396,10 @@
       "boundElements": [
         {
           "id": "a_analytics",
+          "type": "arrow"
+        },
+        {
+          "id": "a_impact_analytics",
           "type": "arrow"
         }
       ],
@@ -611,8 +675,8 @@
       "y": 534.5,
       "width": 158.5625,
       "height": 70.0,
-      "text": "passenger_\nconnections",
-      "originalText": "passenger_\nconnections",
+      "text": "passenger_\nitineraries",
+      "originalText": "passenger_\nitineraries",
       "fontSize": 28,
       "fontFamily": 5,
       "textAlign": "center",
@@ -687,8 +751,8 @@
       "y": 465.0,
       "width": 152.203125,
       "height": 70.0,
-      "text": "passenger_\nrisk",
-      "originalText": "passenger_\nrisk",
+      "text": "passenger_\nstate",
+      "originalText": "passenger_\nstate",
       "fontSize": 28,
       "fontFamily": 5,
       "textAlign": "center",
@@ -723,6 +787,82 @@
       "type": "text",
       "x": 654.453125,
       "y": 482,
+      "width": 24.25,
+      "height": 35.0,
+      "text": "\u26a1",
+      "originalText": "\u26a1",
+      "fontSize": 28,
+      "fontFamily": 5,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "lineHeight": 1.25,
+      "containerId": null,
+      "autoResize": true
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [
+        "flight_impact_group"
+      ],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1002,
+      "version": 1,
+      "versionNonce": 6002,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "flight_impact_text",
+      "type": "text",
+      "x": 883.453125,
+      "y": 215.0,
+      "width": 100.0,
+      "height": 70.0,
+      "text": "flight_\nimpact",
+      "originalText": "flight_\nimpact",
+      "fontSize": 28,
+      "fontFamily": 5,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "lineHeight": 1.25,
+      "containerId": null,
+      "autoResize": true
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [
+        "flight_impact_group"
+      ],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1003,
+      "version": 1,
+      "versionNonce": 6003,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "flight_impact_bolt",
+      "type": "text",
+      "x": 1024.453125,
+      "y": 232.0,
       "width": 24.25,
       "height": 35.0,
       "text": "\u26a1",
@@ -797,12 +937,12 @@
       "locked": false,
       "id": "recovery_agent_sub",
       "type": "text",
-      "x": 881.109375,
+      "x": 854.296875,
       "y": 525.5,
-      "width": 128.6875,
+      "width": 182.3125,
       "height": 25.0,
-      "text": "hosted model",
-      "originalText": "hosted model",
+      "text": "Claude on Bedrock",
+      "originalText": "Claude on Bedrock",
       "fontSize": 20,
       "fontFamily": 5,
       "textAlign": "center",
@@ -911,12 +1051,50 @@
       "locked": false,
       "id": "hotel_inventory_text",
       "type": "text",
-      "x": 838.984375,
+      "x": 826.953125,
       "y": 732.5,
       "width": 212.9375,
       "height": 35.0,
       "text": "hotel_inventory",
       "originalText": "hotel_inventory",
+      "fontSize": 28,
+      "fontFamily": 5,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "lineHeight": 1.25,
+      "containerId": null,
+      "autoResize": true
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [
+        "hotel_inventory_group"
+      ],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1004,
+      "version": 1,
+      "versionNonce": 6004,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "hotel_inventory_bolt",
+      "type": "text",
+      "x": 1054.890625,
+      "y": 732.5,
+      "width": 24.25,
+      "height": 35.0,
+      "text": "\u26a1",
+      "originalText": "\u26a1",
       "fontSize": 28,
       "fontFamily": 5,
       "textAlign": "center",
@@ -1099,8 +1277,8 @@
       "locked": false,
       "id": "lbl_ops",
       "type": "text",
-      "x": 1101.234375,
-      "y": 183.0,
+      "x": 1374.1875,
+      "y": 208.0,
       "width": 58.4375,
       "height": 35.0,
       "text": "OPS",
@@ -1135,8 +1313,8 @@
       "locked": false,
       "id": "n_ops",
       "type": "text",
-      "x": 1047.2578125,
-      "y": 233.0,
+      "x": 1320.2109375,
+      "y": 258.0,
       "width": 166.390625,
       "height": 25.0,
       "text": "Lightning Queries",
@@ -1429,6 +1607,150 @@
       "height": 50.0,
       "text": "Pings the passenger, re-checks\nthe hotel, books the offer",
       "originalText": "Pings the passenger, re-checks\nthe hotel, books the offer",
+      "fontSize": 20,
+      "fontFamily": 5,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "lineHeight": 1.25,
+      "containerId": null,
+      "autoResize": true
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1005,
+      "version": 1,
+      "versionNonce": 6005,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "n_drill",
+      "type": "text",
+      "x": 1080.0,
+      "y": 87.0,
+      "width": 196.0,
+      "height": 25.0,
+      "text": "passenger drill-down",
+      "originalText": "passenger drill-down",
+      "fontSize": 20,
+      "fontFamily": 5,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "lineHeight": 1.25,
+      "containerId": null,
+      "autoResize": true
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1007,
+      "version": 1,
+      "versionNonce": 6007,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "n_count_high",
+      "type": "text",
+      "x": 614.0,
+      "y": 264.0,
+      "width": 100.0,
+      "height": 50.0,
+      "text": "count HIGH\nper flight",
+      "originalText": "count HIGH\nper flight",
+      "fontSize": 20,
+      "fontFamily": 5,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "lineHeight": 1.25,
+      "containerId": null,
+      "autoResize": true
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1010,
+      "version": 1,
+      "versionNonce": 6010,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "n_tableflow_impact",
+      "type": "text",
+      "x": 1391.5796875,
+      "y": 748.0,
+      "width": 93.28125,
+      "height": 25.0,
+      "text": "Tableflow",
+      "originalText": "Tableflow",
+      "fontSize": 20,
+      "fontFamily": 5,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "lineHeight": 1.25,
+      "containerId": null,
+      "autoResize": true
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1012,
+      "version": 1,
+      "versionNonce": 6012,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "n_lightning_hotel",
+      "type": "text",
+      "x": 1531.65625,
+      "y": 898.0,
+      "width": 88.0,
+      "height": 25.0,
+      "text": "Lightning",
+      "originalText": "Lightning",
       "fontSize": 20,
       "fontFamily": 5,
       "textAlign": "left",
@@ -1929,10 +2251,10 @@
       "locked": false,
       "id": "a_ops",
       "type": "arrow",
-      "x": 575.453125,
+      "x": 490.0,
       "y": 431.0,
-      "width": 1156.90625,
-      "height": 206.0,
+      "width": 1386.359375,
+      "height": 311.0,
       "points": [
         [
           0.0,
@@ -1940,11 +2262,15 @@
         ],
         [
           0.0,
-          -206.0
+          -311.0
         ],
         [
-          1156.90625,
-          -206.0
+          1386.359375,
+          -311.0
+        ],
+        [
+          1386.359375,
+          -240.0
         ]
       ],
       "lastCommittedPoint": null,
@@ -2111,6 +2437,234 @@
       },
       "endBinding": {
         "elementId": "analytics",
+        "focus": 0,
+        "gap": 4
+      }
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1006,
+      "version": 1,
+      "versionNonce": 6006,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "a_state_impact",
+      "type": "arrow",
+      "x": 600.0,
+      "y": 431.0,
+      "width": 216.453125,
+      "height": 181.0,
+      "points": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -181.0
+        ],
+        [
+          216.453125,
+          -181.0
+        ]
+      ],
+      "lastCommittedPoint": null,
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "startBinding": {
+        "elementId": "passenger_risk",
+        "focus": 0,
+        "gap": 4
+      },
+      "endBinding": {
+        "elementId": "flight_impact",
+        "focus": 0,
+        "gap": 4
+      }
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1008,
+      "version": 1,
+      "versionNonce": 6008,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "a_impact_dash",
+      "type": "arrow",
+      "x": 1074.453125,
+      "y": 250.0,
+      "width": 657.90625,
+      "height": 0.0,
+      "points": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          657.90625,
+          0.0
+        ]
+      ],
+      "lastCommittedPoint": null,
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "startBinding": {
+        "elementId": "flight_impact",
+        "focus": 0,
+        "gap": 4
+      },
+      "endBinding": {
+        "elementId": "dashboard",
+        "focus": 0,
+        "gap": 4
+      }
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1009,
+      "version": 1,
+      "versionNonce": 6009,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "a_impact_analytics",
+      "type": "arrow",
+      "x": 1074.453125,
+      "y": 290.0,
+      "width": 657.90625,
+      "height": 490.0,
+      "points": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          65.546875,
+          0.0
+        ],
+        [
+          65.546875,
+          490.0
+        ],
+        [
+          657.90625,
+          490.0
+        ]
+      ],
+      "lastCommittedPoint": null,
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "startBinding": {
+        "elementId": "flight_impact",
+        "focus": 0,
+        "gap": 4
+      },
+      "endBinding": {
+        "elementId": "analytics",
+        "focus": 0,
+        "gap": 4
+      }
+    },
+    {
+      "angle": 0,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 1,
+      "opacity": 100,
+      "groupIds": [],
+      "frameId": null,
+      "roundness": null,
+      "seed": 1011,
+      "version": 1,
+      "versionNonce": 6011,
+      "isDeleted": false,
+      "boundElements": [],
+      "updated": 1780000000000,
+      "link": null,
+      "locked": false,
+      "id": "a_hotel_app",
+      "type": "arrow",
+      "x": 1070.953125,
+      "y": 804.0,
+      "width": 1009.40625,
+      "height": 430.0,
+      "points": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          126.0
+        ],
+        [
+          1009.40625,
+          126.0
+        ],
+        [
+          1009.40625,
+          -304.0
+        ],
+        [
+          949.40625,
+          -304.0
+        ]
+      ],
+      "lastCommittedPoint": null,
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "startBinding": {
+        "elementId": "hotel_inventory",
+        "focus": 0,
+        "gap": 4
+      },
+      "endBinding": {
+        "elementId": "passenger_app",
         "focus": 0,
         "gap": 4
       }

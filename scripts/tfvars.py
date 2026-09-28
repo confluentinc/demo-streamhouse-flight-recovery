@@ -71,7 +71,7 @@ def generate_core_tfvars_content(
 
     Bedrock and Tableflow AWS credentials are both optional: when omitted, the
     topic/serving/ops stack still deploys and the recovery streaming agent /
-    keynote S3+Glue analytics path are skipped, respectively.
+    Tableflow S3+Glue analytics path are skipped, respectively.
 
     Args:
         region: AWS region
@@ -81,8 +81,8 @@ def generate_core_tfvars_content(
         aws_bedrock_access_key: AWS Bedrock access key (optional)
         aws_bedrock_secret_key: AWS Bedrock secret key (optional)
         aws_session_token: AWS session token for Bedrock (optional, for ASIA* temp creds)
-        aws_tableflow_access_key: AWS access key for the keynote Tableflow S3/Glue path (optional)
-        aws_tableflow_secret_key: AWS secret key for the keynote Tableflow S3/Glue path (optional)
+        aws_tableflow_access_key: AWS access key for the Tableflow S3/Glue path (optional)
+        aws_tableflow_secret_key: AWS secret key for the Tableflow S3/Glue path (optional)
         aws_tableflow_session_token: AWS session token for Tableflow (optional, for ASIA* temp creds)
 
     Returns:
@@ -118,8 +118,8 @@ def write_tfvars_for_deployment(
     Write terraform.tfvars for the core module (AWS-only, airline demo).
 
     airline-demo needs no tfvars of its own — it inherits everything from core via
-    terraform_remote_state, and enable_streaming_agent defaults to true (auto-skipped
-    when core has no Bedrock connection).
+    terraform_remote_state, and enable_analytics defaults to true (auto-skipped
+    when core has no AWS Tableflow credentials).
 
     Args:
         root: Project root directory

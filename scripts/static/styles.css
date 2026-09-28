@@ -117,4 +117,13 @@ td .pax-key { display: block; margin-top: 1px; }
 .offer .msg { margin: 8px 0 14px; }
 .offer .foot-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
+/* Flight recovery layout */
+.stack { display: grid; gap: 16px; align-content: start; min-width: 0; }
+.scroll { max-height: 460px; overflow-y: auto; }
+.hidden { display: none; }
+.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.offer + .offer { margin-top: 10px; }
+.offer .cost { color: var(--muted); font-size: 12.5px; }
+
 .foot { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }

@@ -15,13 +15,14 @@ from pathlib import Path
 from .generate_deployment_summary import generate_credentials_markdown
 
 
-def run_terraform(env_path: Path, auto_approve: bool = True) -> bool:
+def run_terraform(env_path: Path, auto_approve: bool = True, targets: tuple[str, ...] = ()) -> bool:
     """
     Run terraform init and apply in the specified environment.
 
     Args:
         env_path: Path to terraform directory
         auto_approve: Whether to auto-approve terraform apply (default: True)
+        targets: Resource addresses for a targeted apply (default: the whole root)
 
     Returns:
         True if successful, False otherwise
@@ -37,6 +38,7 @@ def run_terraform(env_path: Path, auto_approve: bool = True) -> bool:
         apply_cmd = ["terraform", "apply"]
         if auto_approve:
             apply_cmd.append("-auto-approve")
+        apply_cmd += [f"-target={target}" for target in targets]
 
         print(f"Running terraform apply in {env_path}...")
         subprocess.run(apply_cmd, cwd=env_path, check=True)

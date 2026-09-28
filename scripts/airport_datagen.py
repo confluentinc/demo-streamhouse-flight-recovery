@@ -1,469 +1,601 @@
-#!/usr/bin/env python3
-"""
-Airport-disruption datagen — the JA417 connection-cascade scenario.
+"""River Air flight recovery data: 30 days of history plus one live day at the SFO hub.
 
-Feeds the four source topics the airport Flink pipeline reads:
-  flight_updates, passenger_itineraries, rebooking_inventory, gate_crew_status
+Each service day has 180 flights: 90 arrivals into SFO and 90 departures from it.
+The live day is shifted so flight RA417 from Chicago is scheduled 50 minutes after the
+stream starts. Its delay is announced in three growing steps, and 200 of its 260
+passengers miss their connection. Every active flight publishes its status once a
+minute. Announced delays only grow (a severe delay may shrink by at most three minutes
+near landing), so a flight never goes from hours late back to on time.
 
-The story is one inbound flight (JA417) whose arrival slips, cascading into the
-onward connections its passengers are booked on:
+The generator writes two rebooking offers a few seconds after a connection becomes HIGH
+risk. Past bookings are completed the way customers would complete them; RA417's offers
+stay open for the presenter. When the recovery agent runs in Flink (sql/26-30), it writes
+the live day's offers and the generator writes only history offers.
 
-  Phase "seed"  — steady state. JA417 arrives early enough that every passenger
-                  makes their connection (passenger_journey.risk = OK).
-  Phase "slip"  — JA417's flight_updates row is re-produced with a later
-                  estimated_arrival. Because the source topics are upsert-keyed by
-                  natural id, this UPDATES the flight in place; Flink recomputes
-                  passenger_journey and the at-risk passengers flip to MISS / TIGHT,
-                  which is what fires the recovery streaming agent.
-  Phase "pivot" — JA512's departure moves later before approval. Maya changes
-                  from MISS to TIGHT; the changed passenger_journey row retriggers
-                  the agent, which drops the overnight plan and expedites her.
-
-`uv run airport-datagen`            seed, wait --slip-delay, then slip (full demo run)
-`uv run airport-datagen --phase seed`   just the steady state
-`uv run airport-datagen --phase slip`   just the slip (JA417 re-produced later)
-`uv run airport-datagen --phase pivot`  move JA512 later (plot twist)
-`uv run airport-datagen --reset`        delete-records the 4 source topics, then exit
-`uv run airport-datagen --dry-run`      print what would be produced, connect to nothing
-
-Deterministic + clock-controllable per the repo's datagen contract:
-  --seed   seeds any jitter (default 42); the scenario itself is fully scripted.
-  --now    ISO-8601 base "now" all timestamps rebase to (default: real now).
-
-Schema handling: the Flink CREATE TABLE statements register each topic's Avro value
-schema in Schema Registry at deploy time, so this datagen FETCHES the registered
-`<topic>-value` schema and serializes against it (auto.register.schemas=False). That
-keeps the generator correct no matter how Flink chose to lay out the value record
-(e.g. whether the primary-key column is included), and it adapts to the timestamp
-logical type Flink picked. Keys are plain strings (the tables pin key.format=raw).
+    uv run airport-datagen                  # history + live day, then stream 90 minutes
+    uv run airport-datagen --offers generator  # write today's offers even if the agent runs
+    uv run airport-datagen --minutes 0      # publish the current state and exit
+    uv run airport-datagen --dry-run --skip-history --minutes 5
+    uv run airport-datagen --reset          # tombstone every generated key
 """
 
 import argparse
 import json
 import logging
-import sys
+import os
+import random
+import signal
+import subprocess
 import time
-from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
-try:
-    from confluent_kafka import Producer
-    from confluent_kafka.admin import AdminClient
-    from confluent_kafka.schema_registry import SchemaRegistryClient
-    from confluent_kafka.schema_registry.avro import AvroSerializer
-    from confluent_kafka.serialization import MessageField, SerializationContext, StringSerializer
-
-    CONFLUENT_KAFKA_AVAILABLE = True
-except ImportError:
-    CONFLUENT_KAFKA_AVAILABLE = False
+from confluent_kafka import Producer
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry.avro import AvroSerializer
+from confluent_kafka.serialization import MessageField, SerializationContext, StringSerializer
 
 from .logging_utils import setup_logging
 from .terraform import extract_kafka_credentials, get_project_root
 
-# Source topics this datagen owns. Serving tables (passenger_journey, etc.) are
-# maintained by Flink and are never written here.
-SOURCE_TOPICS = [
-    "flight_updates",
-    "passenger_itineraries",
-    "rebooking_inventory",
-    "gate_crew_status",
-]
+FLIGHTS = "flight_status"
+ITINERARIES = "passenger_itineraries"
+HOTELS = "hotel_inventory"
+OFFERS = "passenger_recommendations"
 
-# ---------------------------------------------------------------------------
-# The JA417 scenario, expressed as minute-offsets from the base clock ("now").
-# The connection rule Flink applies (see 08-insert-passenger-journey.sql):
-#   make_connection = inbound.arrival + 30min <= connecting.departure
-#   risk = MISS  if inbound.arrival + 30min >  connecting.departure
-#          TIGHT if (departure - arrival) < 45min
-#          OK    otherwise
-# ---------------------------------------------------------------------------
+AIRLINE = "RA"
+HUB = "SFO"
+SPOKES = ("ORD", "SEA", "LAX", "DEN", "PHX", "DFW", "ATL", "JFK", "BOS", "MSP", "LAS", "SAN", "PDX", "SLC", "IAH")
 
-INBOUND_FLIGHT = "JA417"
-INBOUND_GATE = "A12"
-INBOUND_ROUTE = "ORD-SFO"
+# Daily template, in minutes after midnight. 90 arrivals from 06:00 to 23:00; 75
+# departures from 06:30 to 22:00 plus a last bank of 15, one to each destination.
+ARRIVAL_MINUTES = tuple(360 + round(i * 1020 / 89) for i in range(90))
+DEPARTURE_MINUTES = (
+    *(390 + round(i * 930 / 74) for i in range(75)),
+    1330, 1335, 1340, 1345, 1350, 1356, 1362, 1368, 1374, 1380, 1386, 1392, 1398, 1404, 1410)
+LAST_BANK = 75
 
-# JA417 inbound arrival, minutes from "now": early at seed, slipped later at slip.
-INBOUND_ARRIVAL_SEED_MIN = 20
-DEFAULT_SLIP_MINUTES = 35  # slipped arrival = 20 + 35 = 55 min from now
+HERO_NUMBER = 417
+HERO_ORIGIN = "ORD"
+HERO_MINUTE = 21 * 60 + 40
+HERO_LEAD = timedelta(minutes=50)
+# (minutes relative to the scheduled arrival, announced delay in minutes)
+HERO_REVEALS = ((-45, 30), (-35, 75), (-25, 115))
+HERO_CONNECTING = 200
+HERO_LOCAL = 60
+HERO_BUFFER = (50, 110)
 
-# Onward departures out of the SFO hub. Chosen so every passenger is OK at seed
-# (min headroom 46 min) and the 35-min slip pushes three to MISS and one to TIGHT.
-#   flight   dest  departure(min)  gate   crew_margin  alt_gate  bags   post-slip
-CONNECTING_FLIGHTS = [
-    # flight, destination, dep_min, gate, crew_margin_min, alt_gate, bag_team, next_flight, next_dep_min, hotel
-    ("JA890", "LAX", 80, "B7",  20, None,  True,  "JA905", 200, "Marriott LAX"),        # -> HOLD  (MISS)
-    ("JA631", "SEA", 70, "B9",   5, "B10", True,  "JA655", 175, "Grand Hyatt SEA"),     # -> REGATE(MISS)
-    ("JA512", "PDX", 66, "C3",   5, None,  False, "JA540", 190, "Kimpton RiverPlace"),  # -> PRIORITY_BAGS (MISS)
-    ("JA742", "SAN", 95, "C5",  25, None,  True,  "JA760", 240, "Pendry San Diego"),    # -> HOLD  (TIGHT)
-]
+CONNECTION_MINUTES = 45  # Flink's HIGH threshold in sql/24-serving-passenger-state.sql
+CONNECTING_SHARE = 0.3
+CONNECTION_BUFFER = (60, 180)
+PASSENGERS_PER_FLIGHT = (120, 180)
+SEVERE_PER_DAY = 10
+SEVERE_DELAY = (90, 240)
+MODERATE_SHARE = 0.25
+MODERATE_DELAY = (15, 60)
+DELAYED_AT = 15
+ACTIVE_BEFORE = timedelta(minutes=180)
+BOARDING = timedelta(minutes=30)
 
-# Passengers, all inbound on JA417. (id, name, connecting_flight, checked_bags, international)
-# `id` (P-10xx) is the unique key everything joins on; `name` is the friendly display
-# name every consumer sees (ops app, passenger card, RTCE agent, Iceberg). Synthetic —
-# no real PII. Spread across the four onward flights with a mix of bag/international
-# status so bag_status and needs_recheck vary in passenger_journey.
-PASSENGERS = [
-    ("P-1001", "James Okoro",    "JA890", 1, False),
-    ("P-1002", "Sofia Ramirez",  "JA890", 0, False),
-    ("P-1003", "Aditya Nair",    "JA890", 2, True),
-    ("P-1004", "Grace Kim",      "JA631", 0, False),
-    ("P-1005", "Daniel Weber",   "JA631", 1, False),
-    ("P-1006", "Amara Diallo",   "JA631", 1, True),
-    ("P-1007", "Liam Murphy",    "JA512", 0, False),
-    ("P-1008", "Priya Menon",    "JA512", 2, False),
-    ("P-1009", "Maya Chen",      "JA512", 1, False),
-    ("P-1010", "Noah Andersen",  "JA742", 0, False),
-    ("P-1011", "Chloe Dubois",   "JA742", 1, False),
-    ("P-1012", "Omar Haddad",    "JA742", 3, True),
-]
+HOTEL_RATES = {"Harbor Hotel": Decimal("189.00"), "Park Hotel": Decimal("219.00")}
+HARBOR_ROOMS = 40
+PARK_ROOMS = 150
+SELLOUT = timedelta(minutes=40)
+OVERNIGHT = timedelta(hours=6)
+AGENT_LATENCY_SECONDS = (5, 40)
+BOOKING_SHARE = 0.85
+DECISION_SECONDS = (3 * 60, 90 * 60)
+OFFER_EXPIRY = timedelta(minutes=90)
 
-# Plot twist: before Maya's overnight recovery can be approved, a ground-flow
-# delay moves her original JA512 departure from +66 to +91 minutes. Her connection
-# window grows from 11 to 36 minutes, so Flink changes her risk from MISS to TIGHT
-# and the streaming agent replaces REBOOK with EXPEDITE.
-PIVOT_FLIGHT = "JA512"
-PIVOT_DESTINATION = "PDX"
-PIVOT_DEPARTURE_MIN = 91
-PIVOT_GATE = "C3"
+HISTORY_DAYS = 30
+STREAM_MINUTES = 90
+SEED = 42
 
 
-def _dest_of(connecting_flight: str) -> str:
-    return next(c[1] for c in CONNECTING_FLIGHTS if c[0] == connecting_flight)
+@dataclass
+class Flight:
+    key: str
+    number: int
+    origin: str
+    destination: str
+    scheduled: datetime
+    offset: int = 0  # seconds after each minute this flight publishes
+    reveals: list[tuple[datetime, int]] = field(default_factory=list)  # (published at, delay minutes)
+
+    @property
+    def arrival(self) -> bool:
+        return self.destination == HUB
+
+    def delay_at(self, at: datetime) -> int:
+        delay = 0
+        for when, minutes in self.reveals:
+            if when <= at:
+                delay = minutes
+        return delay
+
+    def estimated_at(self, at: datetime = datetime.max) -> datetime:
+        return self.scheduled + timedelta(minutes=self.delay_at(at))
+
+    def status_at(self, at: datetime) -> str:
+        estimated = self.estimated_at(at)
+        if at >= estimated:
+            return "LANDED" if self.arrival else "DEPARTED"
+        if not self.arrival and at >= estimated - BOARDING:
+            return "BOARDING"
+        return "DELAYED" if self.delay_at(at) >= DELAYED_AT else "ON_TIME"
+
+    def row(self, at: datetime) -> dict:
+        return dict(origin=self.origin, destination=self.destination, scheduled_time=self.scheduled,
+                    estimated_time=self.estimated_at(at), status=self.status_at(at))
+
+    def ticks(self, after: datetime, until: datetime):
+        """Once-a-minute update times in (after, until], from three hours out to completion."""
+        tick = self.scheduled - ACTIVE_BEFORE + timedelta(seconds=self.offset)
+        last = self.estimated_at() + timedelta(seconds=self.offset)
+        if tick <= after:
+            tick += timedelta(minutes=(after - tick) // timedelta(minutes=1) + 1)
+        while tick <= min(last, until):
+            yield tick
+            tick += timedelta(minutes=1)
 
 
-class AirportDatagen:
-    """Produces the JA417 scenario to the four source topics."""
+@dataclass
+class Passenger:
+    key: str
+    inbound: Flight
+    connecting: Flight | None
+    impacted_at: datetime | None = None
 
-    def __init__(self, creds: dict, base_now: datetime, dry_run: bool = False):
-        self.log = logging.getLogger(__name__)
-        self.base_now = base_now
+
+@dataclass
+class Recovery:
+    """The agent's two offers for one HIGH-risk passenger and what the passenger did with them."""
+
+    passenger: Passenger
+    options: list[Flight]
+    hotels: list[str | None]
+    recommended_at: datetime
+    resolved_at: datetime
+    booked: int | None  # index of the booked option; None if the passenger never chose
+    completes: bool = True  # False leaves the offers open for the presenter
+
+    def rows(self, at: datetime):
+        if at < self.recommended_at:
+            return
+        final = self.completes and at >= self.resolved_at
+        for index, (flight, hotel) in enumerate(zip(self.options, self.hotels, strict=True)):
+            status = "OFFERED"
+            if final:
+                status = "BOOKED" if index == self.booked else "CLOSED"
+            yield f"{self.passenger.key}-O{index + 1}", dict(
+                passenger_id=self.passenger.key, recommended_flight_id=flight.key, hotel_name=hotel,
+                status=status, hotel_cost=HOTEL_RATES[hotel] if hotel else None,
+                impacted_at=self.passenger.impacted_at, recommended_at=self.recommended_at)
+
+
+@dataclass
+class Day:
+    service_date: date
+    live: bool
+    arrivals: list[Flight]
+    departures: list[Flight]
+    passengers: list[Passenger]
+
+    @property
+    def flights(self) -> list[Flight]:
+        return self.arrivals + self.departures
+
+    @property
+    def hero(self) -> Flight:
+        return self.arrivals[ARRIVAL_MINUTES.index(HERO_MINUTE)]
+
+
+@dataclass
+class Plan:
+    start: datetime
+    days: list[Day]  # oldest history first, live day last
+    tomorrow: Day
+    recoveries: list[Recovery]
+
+    @property
+    def live(self) -> Day:
+        return self.days[-1]
+
+
+def _clock(value: str | None) -> datetime:
+    """Stream start as naive UTC, trimmed to the minute."""
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00")) if value else datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+
+
+def _delays(flight: Flight, steps) -> None:
+    """Announce delays at (minutes from schedule, delay) steps, on this flight's update tick."""
+    flight.reveals = [(flight.scheduled + timedelta(minutes=rel, seconds=flight.offset), delay)
+                      for rel, delay in steps]
+
+
+def _assign_delays(day: Day, rng: random.Random) -> None:
+    hero = day.hero if day.live else None
+    forced = {f.key for f in day.departures[LAST_BANK:]} if day.live else set()
+    pool = [f for f in day.flights if f is not hero and f.key not in forced]
+    severe = {f.key for f in rng.sample(pool, SEVERE_PER_DAY - (1 if hero else 0))}
+    for flight in day.flights:
+        if flight is hero:
+            _delays(flight, HERO_REVEALS)
+        elif flight.key in forced:
+            continue
+        elif flight.key in severe:
+            delay = rng.randint(*SEVERE_DELAY)
+            steps = [(-120, round(delay * 0.3)), (-80, round(delay * 0.65)), (-40, delay)]
+            makeup = rng.randint(0, 3) if flight.arrival else 0
+            if makeup:
+                steps.append((delay - 20, delay - makeup))
+            _delays(flight, steps)
+        elif rng.random() < MODERATE_SHARE:
+            delay = rng.randint(*MODERATE_DELAY)
+            _delays(flight, [(-90, delay // 2), (-45, delay)])
+        else:
+            delay = rng.randint(-8 if flight.arrival else 0, 12)
+            if delay:
+                _delays(flight, [(-30 if flight.arrival else -40, delay)])
+
+
+def _risk_flip(inbound: Flight, onward: Flight) -> tuple[bool, datetime | None]:
+    """Whether the connection's risk changes at most once (OK -> HIGH), and when it does."""
+    def at_risk(at):
+        return onward.estimated_at(at) - inbound.estimated_at(at) < timedelta(minutes=CONNECTION_MINUTES)
+
+    if at_risk(datetime.min):
+        return False, None
+    flip = None
+    for when in sorted({w for w, _ in inbound.reveals} | {w for w, _ in onward.reveals}):
+        risky = at_risk(when)
+        if flip is None and risky:
+            flip = when
+        elif flip is not None and not risky:
+            return False, None
+    return True, flip
+
+
+def _passengers(day: Day, rng: random.Random) -> list[Passenger]:
+    passengers = []
+    for flight in day.arrivals:
+        hero = day.live and flight is day.hero
+        if hero:
+            plan = [True] * HERO_CONNECTING + [False] * HERO_LOCAL
+            rng.shuffle(plan)
+            low, high = HERO_BUFFER
+        else:
+            plan = [rng.random() < CONNECTING_SHARE for _ in range(rng.randint(*PASSENGERS_PER_FLIGHT))]
+            low, high = CONNECTION_BUFFER
+        candidates = [d for d in day.departures if d.destination != flight.origin
+                      and timedelta(minutes=low) <= d.scheduled - flight.scheduled <= timedelta(minutes=high)]
+        for seq, connects in enumerate(plan, start=1):
+            passenger = Passenger(f"P-{day.service_date:%m%d}-{flight.number:03d}-{seq:03d}", flight, None)
+            if connects and candidates:
+                for onward in rng.sample(candidates, min(3, len(candidates))):
+                    valid, flip = _risk_flip(flight, onward)
+                    if valid:
+                        passenger.connecting, passenger.impacted_at = onward, flip
+                        break
+            passengers.append(passenger)
+    return passengers
+
+
+def build_day(seed: int, service_date: date, midnight: datetime, live: bool = False,
+              schedule_only: bool = False) -> Day:
+    """One service day. The same seed, date, and variant always produce the same keys and values."""
+    variant = "live" if live else "schedule" if schedule_only else "history"
+    rng = random.Random(f"{seed}:{service_date.isoformat()}:{variant}")
+    suffix = f"{service_date:%Y%m%d}"
+    numbers = iter(range(101, 101 + len(ARRIVAL_MINUTES)))
+    arrivals = []
+    for i, minute in enumerate(ARRIVAL_MINUTES):
+        hero = minute == HERO_MINUTE
+        number = HERO_NUMBER if hero else next(numbers)
+        arrivals.append(Flight(f"{AIRLINE}{number}-{suffix}", number, HERO_ORIGIN if hero else SPOKES[i % 15],
+                               HUB, midnight + timedelta(minutes=minute), 0 if hero else rng.randrange(60)))
+    departures = [Flight(f"{AIRLINE}{601 + i}-{suffix}", 601 + i, HUB, SPOKES[i % 15],
+                         midnight + timedelta(minutes=minute), rng.randrange(60))
+                  for i, minute in enumerate(DEPARTURE_MINUTES)]
+    day = Day(service_date, live, arrivals, departures, [])
+    if not schedule_only:
+        _assign_delays(day, rng)
+        day.passengers = _passengers(day, rng)
+    return day
+
+
+def _recoveries(day: Day, next_day: Day, seed: int, sellout_at: datetime | None) -> list[Recovery]:
+    rng = random.Random(f"{seed}:{day.service_date.isoformat()}:{'live' if day.live else 'history'}:recovery")
+    by_destination: dict[str, list[Flight]] = {}
+    for flight in day.departures + next_day.departures:
+        by_destination.setdefault(flight.destination, []).append(flight)
+
+    def harbor_open(at):
+        return sellout_at is None or at < sellout_at
+
+    recoveries = []
+    for passenger in day.passengers:
+        if passenger.impacted_at is None:
+            continue
+        landed = passenger.inbound.estimated_at()
+        ready = landed + timedelta(minutes=CONNECTION_MINUTES)
+        options = [f for f in by_destination[passenger.connecting.destination] if f.scheduled >= ready][:2]
+        if not options:
+            continue
+        recommended_at = passenger.impacted_at + timedelta(seconds=rng.randint(*AGENT_LATENCY_SECONDS))
+        hotels = []
+        for index, flight in enumerate(options):
+            if flight.scheduled - landed < OVERNIGHT:
+                hotels.append(None)
+            else:
+                hotels.append("Harbor Hotel" if index == 0 and harbor_open(recommended_at) else "Park Hotel")
+        books = rng.random() < BOOKING_SHARE
+        decided_at = recommended_at + timedelta(seconds=rng.randint(*DECISION_SECONDS))
+        choice = 0 if rng.random() < 0.7 or len(options) == 1 else 1
+        if books and hotels[choice] == "Harbor Hotel" and not harbor_open(decided_at) and len(options) > 1:
+            choice = 1 - choice
+        recoveries.append(Recovery(
+            passenger, options, hotels, recommended_at,
+            resolved_at=decided_at if books else recommended_at + OFFER_EXPIRY,
+            booked=choice if books else None,
+            completes=not (day.live and passenger.inbound is day.hero)))
+    return recoveries
+
+
+def build_plan(start: datetime, seed: int = SEED, history: bool = True) -> Plan:
+    """History days, the live day starting at `start`, and tomorrow's schedule for overnight rebookings."""
+    midnight = start + HERO_LEAD - timedelta(minutes=HERO_MINUTE)
+    today = start.date()
+    days = [build_day(seed, today - timedelta(days=back), midnight - timedelta(days=back))
+            for back in range(HISTORY_DAYS if history else 0, 0, -1)]
+    days.append(build_day(seed, today, midnight, live=True))
+    tomorrow = build_day(seed, today + timedelta(days=1), midnight + timedelta(days=1), schedule_only=True)
+    recoveries = []
+    for day, next_day in zip(days, [*days[1:], tomorrow], strict=True):
+        recoveries += _recoveries(day, next_day, seed, start + SELLOUT if day.live else None)
+    return Plan(start, days, tomorrow, recoveries)
+
+
+def _harbor(rooms: int) -> dict:
+    return dict(available_rooms=rooms, nightly_rate=HOTEL_RATES["Harbor Hotel"])
+
+
+def initial_records(plan: Plan):
+    """Every row as of the stream start: history final state, the live day so far, tomorrow's schedule."""
+    at = plan.start
+    yield HOTELS, "Harbor Hotel", _harbor(HARBOR_ROOMS)
+    yield HOTELS, "Park Hotel", dict(available_rooms=PARK_ROOMS, nightly_rate=HOTEL_RATES["Park Hotel"])
+    for day in [*plan.days, plan.tomorrow]:
+        for flight in day.flights:
+            yield FLIGHTS, flight.key, flight.row(at)
+    for day in plan.days:
+        for passenger in day.passengers:
+            # History keeps only connecting passengers; nobody else can be impacted.
+            if day.live or passenger.connecting:
+                yield ITINERARIES, passenger.key, dict(
+                    inbound_flight_id=passenger.inbound.key,
+                    connecting_flight_id=passenger.connecting.key if passenger.connecting else None)
+    for recovery in plan.recoveries:
+        for key, value in recovery.rows(at):
+            yield OFFERS, key, value
+
+
+def stream_events(plan: Plan, minutes: int) -> list[tuple[datetime, str, str, dict]]:
+    """Timed live updates after the stream start: flights, the hotel sellout, and offers."""
+    start, end = plan.start, plan.start + timedelta(minutes=minutes)
+    events = []
+    for flight in plan.live.flights:
+        events += [(tick, FLIGHTS, flight.key, flight.row(tick)) for tick in flight.ticks(start, end)]
+    for minute in range(1, int(SELLOUT / timedelta(minutes=1)) + 1):
+        at = start + timedelta(minutes=minute)
+        if at <= end:
+            events.append((at, HOTELS, "Harbor Hotel",
+                           _harbor(HARBOR_ROOMS - HARBOR_ROOMS * minute // int(SELLOUT.total_seconds() // 60))))
+    for recovery in plan.recoveries:
+        if recovery.passenger.inbound not in plan.live.arrivals:
+            continue
+        moments = [recovery.recommended_at] + ([recovery.resolved_at] if recovery.completes else [])
+        for at in moments:
+            if start < at <= end:
+                events += [(at, OFFERS, key, value) for key, value in recovery.rows(at)]
+    events.sort(key=lambda event: event[0])
+    return events
+
+
+def reset_keys(start: datetime, seed: int = SEED) -> dict[str, set[str]]:
+    """Every key a run near `start` could have written, with a few days of margin either side."""
+    keys = {FLIGHTS: set(), ITINERARIES: set(), HOTELS: set(HOTEL_RATES), OFFERS: set()}
+    for back in range(-3, HISTORY_DAYS + 4):
+        service_date = start.date() - timedelta(days=back)
+        for live in (True, False):
+            day = build_day(seed, service_date, start, live=live)
+            keys[FLIGHTS].update(f.key for f in day.flights)
+            for passenger in day.passengers:
+                keys[ITINERARIES].add(passenger.key)
+                if passenger.impacted_at:
+                    keys[OFFERS].update({f"{passenger.key}-O1", f"{passenger.key}-O2"})
+    return keys
+
+
+class Publisher:
+    def __init__(self, credentials: dict | None, dry_run: bool):
         self.dry_run = dry_run
-        self.creds = creds
-        self.bootstrap = creds.get("bootstrap_servers", "")
-        self.string_serializer = StringSerializer("utf_8") if CONFLUENT_KAFKA_AVAILABLE else None
-        self._sr = None
-        self._serializers: dict[str, AvroSerializer] = {}
-        self._producer = None
-
-    # --- clock ------------------------------------------------------------
-    def at(self, minutes_from_now: int) -> datetime:
-        """A wall-clock timestamp `minutes_from_now` after the base clock (naive UTC)."""
-        return self.base_now + timedelta(minutes=minutes_from_now)
-
-    # --- kafka / schema registry -----------------------------------------
-    def _connect(self) -> None:
-        if self.dry_run or self._producer is not None:
+        self.serializers = {}
+        self.string = StringSerializer("utf_8")
+        if dry_run:
             return
-        sr_auth = f"{self.creds['schema_registry_api_key']}:{self.creds['schema_registry_api_secret']}"
-        self._sr = SchemaRegistryClient(
-            {
-                "url": self.creds["schema_registry_url"],
-                "basic.auth.user.info": sr_auth,
-            }
-        )
-        # Plain Producer: keys and values are serialized here (each topic has its
-        # own registered value schema, so a single value.serializer wouldn't fit).
-        self._producer = Producer(
-            {
-                "bootstrap.servers": self.bootstrap,
-                "security.protocol": "SASL_SSL",
-                "sasl.mechanism": "PLAIN",
-                "sasl.username": self.creds["kafka_api_key"],
-                "sasl.password": self.creds["kafka_api_secret"],
-            }
-        )
-
-    def _serializer_for(self, topic: str) -> AvroSerializer:
-        """Fetch the Flink-registered <topic>-value schema and build a serializer for it."""
-        if topic in self._serializers:
-            return self._serializers[topic]
-        subject = f"{topic}-value"
-        registered = self._sr.get_latest_version(subject)
-        schema_str = registered.schema.schema_str
-        ser = AvroSerializer(
-            self._sr,
-            schema_str,
-            conf={"auto.register.schemas": False, "use.latest.version": True},
-        )
-        # remember which fields are timestamp-logical so we coerce datetimes right
-        self._coercers = getattr(self, "_coercers", {})
-        self._coercers[topic] = _timestamp_coercers(schema_str)
-        self._serializers[topic] = ser
-        self.log.info("Loaded registered schema for %s (id=%s)", subject, registered.schema_id)
-        return ser
-
-    def _produce(self, topic: str, key: str, value: dict) -> None:
-        """Coerce datetimes to the schema's logical type, then produce one record."""
-        if self.dry_run:
-            printable = {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in value.items()}
-            print(f"  [{topic}] {key} -> {json.dumps(printable, default=str)}")
-            return
-        ser = self._serializer_for(topic)
-        coerced = dict(value)
-        for field, coerce in self._coercers.get(topic, {}).items():
-            if field in coerced and isinstance(coerced[field], datetime):
-                coerced[field] = coerce(coerced[field])
-        value_bytes = ser(coerced, SerializationContext(topic, MessageField.VALUE))
-        key_bytes = self.string_serializer(key, SerializationContext(topic, MessageField.KEY))
-        self._producer.produce(
-            topic=topic,
-            key=key_bytes,
-            value=value_bytes,
-            partition=0,  # every source topic is 1 bucket / 1 partition
-        )
-        self._producer.poll(0)
-
-    def _flush(self) -> None:
-        if not self.dry_run and self._producer is not None:
-            self._producer.flush(30)
-
-    # --- scenario phases --------------------------------------------------
-    def seed(self, slip_minutes: int) -> None:
-        """Steady state: JA417 early, all connections OK; plus static reference data."""
-        self._connect()
-        arrival = self.at(INBOUND_ARRIVAL_SEED_MIN)
-        self.log.info("Seeding: JA417 arrival %s (on time), %d passengers", arrival.isoformat(), len(PASSENGERS))
-
-        # flight_updates: the inbound flight (early) + every onward departure
-        self._produce("flight_updates", INBOUND_FLIGHT, {
-            "route": INBOUND_ROUTE,
-            "estimated_arrival": arrival,
-            "estimated_departure": None,
-            "gate": INBOUND_GATE,
+        credentials = credentials or {}
+        self.schema_registry = SchemaRegistryClient({
+            "url": credentials["schema_registry_url"],
+            "basic.auth.user.info": (
+                f"{credentials['schema_registry_api_key']}:{credentials['schema_registry_api_secret']}")})
+        self.producer = Producer({
+            "bootstrap.servers": credentials["bootstrap_servers"],
+            "security.protocol": "SASL_SSL", "sasl.mechanism": "PLAIN",
+            "sasl.username": credentials["kafka_api_key"],
+            "sasl.password": credentials["kafka_api_secret"],
+            "linger.ms": 20,
         })
-        for flight, dest, dep_min, gate, *_ in CONNECTING_FLIGHTS:
-            self._produce("flight_updates", flight, {
-                "route": f"SFO-{dest}",
-                "estimated_arrival": None,
-                "estimated_departure": self.at(dep_min),
-                "gate": gate,
-            })
 
-        # passenger_itineraries: everyone inbound on JA417
-        for pid, name, connecting, bags, intl in PASSENGERS:
-            self._produce("passenger_itineraries", pid, {
-                "passenger_name": name,
-                "inbound_flight": INBOUND_FLIGHT,
-                "connecting_flight": connecting,
-                "destination": _dest_of(connecting),
-                "checked_bags": bags,
-                "international": intl,
-            })
-
-        # rebooking_inventory: keyed by destination (concierge agent joins this)
-        for c in CONNECTING_FLIGHTS:
-            dest, next_flight, next_dep_min, hotel = c[1], c[7], c[8], c[9]
-            self._produce("rebooking_inventory", dest, {
-                "next_flight": next_flight,
-                "next_departure": self.at(next_dep_min),
-                "hotel": hotel,
-            })
-
-        # gate_crew_status: keyed by onward flight_id (ops spoke joins this)
-        for flight, _dest, _dep, _gate, crew_margin, alt_gate, bag_team, *_ in CONNECTING_FLIGHTS:
-            self._produce("gate_crew_status", flight, {
-                "crew_duty_margin_min": crew_margin,
-                "alt_gate": alt_gate,
-                "bag_team_available": bag_team,
-            })
-
-        self._flush()
-        self.log.info("Seed complete.")
-
-    def slip(self, slip_minutes: int) -> None:
-        """Re-produce JA417 with a later arrival — the cascade trigger."""
-        self._connect()
-        slipped = self.at(INBOUND_ARRIVAL_SEED_MIN + slip_minutes)
-        self.log.info(
-            "SLIP: JA417 arrival now %s (+%d min) — connections will flip to MISS/TIGHT",
-            slipped.isoformat(), slip_minutes,
-        )
-        self._produce("flight_updates", INBOUND_FLIGHT, {
-            "route": INBOUND_ROUTE,
-            "estimated_arrival": slipped,
-            "estimated_departure": None,
-            "gate": INBOUND_GATE,
-        })
-        self._flush()
-        self.log.info("Slip produced. Watch passenger_journey.risk and passenger_recovery.")
-
-    def pivot(self) -> None:
-        """Move JA512 later so the agent must revise Maya's recovery."""
-        self._connect()
-        self.log.info(
-            "PIVOT: %s departure moved later — Maya changes from MISS to TIGHT",
-            PIVOT_FLIGHT,
-        )
-        self._produce(
-            "flight_updates",
-            PIVOT_FLIGHT,
-            {
-                "route": f"SFO-{PIVOT_DESTINATION}",
-                "estimated_arrival": None,
-                "estimated_departure": self.at(PIVOT_DEPARTURE_MIN),
-                "gate": PIVOT_GATE,
-            },
-        )
-        self._flush()
-        self.log.info(
-            "Pivot produced. Watch Maya's passenger_journey change to TIGHT and recovery to EXPEDITE."
-        )
-
-    # --- reset ------------------------------------------------------------
-    def reset(self) -> None:
-        """delete-records on the four source topics for an idempotent restart."""
+    def publish(self, topic: str, key: str, value: dict | None) -> None:
         if self.dry_run:
-            for t in SOURCE_TOPICS:
-                print(f"  [reset] would delete-records on {t}")
+            print(json.dumps({"topic": topic, "key": key, "value": value}, default=str))
             return
-        admin = AdminClient(
-            {
-                "bootstrap.servers": self.bootstrap,
-                "security.protocol": "SASL_SSL",
-                "sasl.mechanism": "PLAIN",
-                "sasl.username": self.creds["kafka_api_key"],
-                "sasl.password": self.creds["kafka_api_secret"],
-            }
-        )
-        _delete_all_records(admin, SOURCE_TOPICS, self.log)
+        if topic not in self.serializers:
+            registered = self.schema_registry.get_latest_version(f"{topic}-value")
+            schema = json.loads(registered.schema.schema_str)
+            self.serializers[topic] = (
+                AvroSerializer(self.schema_registry, registered.schema.schema_str,
+                               conf={"auto.register.schemas": False, "use.latest.version": True}),
+                {field["name"]: field["type"] for field in schema["fields"]},
+            )
+        serializer, fields = self.serializers[topic]
+        if value is not None:
+            value = dict(value)
+            for name, field_type in fields.items():
+                if name not in value or not isinstance(value[name], datetime):
+                    continue
+                variants = field_type if isinstance(field_type, list) else [field_type]
+                if any(isinstance(t, dict) and t.get("logicalType") == "timestamp-millis" for t in variants):
+                    value[name] = value[name].replace(tzinfo=timezone.utc)
+        context = SerializationContext(topic, MessageField.VALUE)
+        payload = serializer(value, context) if value is not None else None
+        encoded_key = self.string(key, SerializationContext(topic, MessageField.KEY))
+        while True:
+            try:
+                self.producer.produce(topic, key=encoded_key, value=payload, partition=0)
+                break
+            except BufferError:
+                self.producer.poll(1)
+        self.producer.poll(0)
+
+    def flush(self) -> None:
+        if not self.dry_run:
+            pending = self.producer.flush(60)
+            if pending:
+                raise RuntimeError(f"{pending} records were not delivered")
 
 
-def _timestamp_coercers(schema_str: str) -> dict[str, Callable[[datetime], datetime]]:
-    """Map each timestamp field -> a fn coercing a naive-UTC datetime to its logical type.
-
-    Flink emits TIMESTAMP(3) as `local-timestamp-millis` (naive wall clock) and
-    TIMESTAMP_LTZ as `timestamp-millis` (tz-aware). fastavro needs the matching
-    Python datetime flavour, so we read the logical type straight from the schema.
-    """
-    coercers: dict[str, Callable[[datetime], datetime]] = {}
-    schema = json.loads(schema_str)
-    for field in schema.get("fields", []):
-        logical = _logical_type_of(field.get("type"))
-        if logical == "timestamp-millis":
-            coercers[field["name"]] = lambda dt: dt.replace(tzinfo=timezone.utc)
-        elif logical == "local-timestamp-millis":
-            coercers[field["name"]] = lambda dt: dt.replace(tzinfo=None)
-    return coercers
+def _pid_file():
+    return get_project_root() / "tmp" / "datagen.pid"
 
 
-def _logical_type_of(field_type: Any) -> str | None:
-    """Pull a timestamp logicalType out of a field type that may be a union/list."""
-    if isinstance(field_type, dict):
-        return field_type.get("logicalType")
-    if isinstance(field_type, list):  # union, e.g. ["null", {...timestamp...}]
-        for member in field_type:
-            lt = _logical_type_of(member)
-            if lt:
-                return lt
-    return None
-
-
-def _delete_all_records(admin, topics: list, log) -> None:
-    """Truncate each topic by asking the broker to delete up to the high watermark."""
-    from confluent_kafka import TopicPartition
-    from confluent_kafka.admin import OFFSET_END
-
-    # Confirm the topics exist before trying to truncate.
-    md = admin.list_topics(timeout=15)
-    present = [t for t in topics if t in md.topics]
-    missing = [t for t in topics if t not in md.topics]
-    for t in missing:
-        log.warning("Topic %s not found (never created?) — skipping reset for it", t)
-
-    partitions = [TopicPartition(t, 0, OFFSET_END) for t in present]
-    if not partitions:
+def stop_previous_stream() -> None:
+    """Stop a stream left running by an earlier deploy or run, so two streams never interleave."""
+    path = _pid_file()
+    try:
+        pid = int(path.read_text().strip())
+    except (OSError, ValueError):
         return
-    futures = admin.delete_records(partitions)
-    for tp, fut in futures.items():
+    if pid != os.getpid():
         try:
-            fut.result(timeout=30)
-            log.info("Reset %s (records deleted up to end)", tp.topic)
-        except Exception as e:
-            log.warning("delete-records failed for %s: %s", tp.topic, e)
+            command = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                                     capture_output=True, text=True, check=False).stdout
+        except OSError:
+            command = ""
+        if "airport-datagen" in command or "airport_datagen" in command:
+            os.kill(pid, signal.SIGTERM)
+            logging.info("Stopped the previous data stream (pid %d)", pid)
+    path.unlink(missing_ok=True)
 
 
-def _parse_now(value: str | None) -> datetime:
-    """Base clock: --now ISO-8601 (naive UTC) or real now truncated to the minute."""
-    if value:
-        dt = datetime.fromisoformat(value)
-        return dt.replace(tzinfo=None, second=0, microsecond=0)
-    return datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+def agent_enabled() -> bool:
+    """True when terraform/airline-demo runs the recovery agent (its recovery_agent_enabled output)."""
+    state = get_project_root() / "terraform" / "airline-demo" / "terraform.tfstate"
+    try:
+        return bool(json.loads(state.read_text())["outputs"]["recovery_agent_enabled"]["value"])
+    except (OSError, KeyError, ValueError):
+        return False
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Airport-disruption (JA417) datagen")
-    parser.add_argument(
-        "--phase",
-        choices=["seed", "slip", "pivot", "all"],
-        default="all",
-        help=(
-            "seed = steady state; slip = re-produce JA417 late; "
-            "pivot = move JA512 later; all = seed, wait, slip (default)"
-        ),
-    )
-    parser.add_argument(
-        "--reset", action="store_true", help="delete-records the 4 source topics, then exit"
-    )
-    parser.add_argument(
-        "--slip-minutes", type=int, default=DEFAULT_SLIP_MINUTES, help="how far JA417 slips (default 35)"
-    )
-    parser.add_argument(
-        "--slip-delay", type=int, default=45, help="seconds between seed and slip in --phase all (default 45)"
-    )
-    parser.add_argument(
-        "--now", help="ISO-8601 base clock all timestamps rebase to (default: real now)"
-    )
-    parser.add_argument(
-        "--seed", type=int, default=42, help="RNG seed for reproducibility (default 42)"
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="print records instead of producing; no cluster"
-    )
-    parser.add_argument("--verbose", action="store_true", help="DEBUG logging")
-    args = parser.parse_args()
-
-    setup_logging(verbose=args.verbose)
-    log = logging.getLogger(__name__)
-
-    if not CONFLUENT_KAFKA_AVAILABLE and not args.dry_run:
-        log.error("confluent-kafka not installed. Run `uv sync`, or use --dry-run.")
-        sys.exit(1)
-
-    import random
-
-    random.seed(args.seed)
-
-    creds: dict = {}
-    if not args.dry_run:
-        try:
-            creds = extract_kafka_credentials("aws", get_project_root())
-        except Exception as e:
-            log.error("Could not read Kafka credentials from terraform state: %s", e)
-            log.error("Deploy first (`uv run deploy`), or use --dry-run.")
-            sys.exit(1)
-
-    gen = AirportDatagen(creds, _parse_now(args.now), dry_run=args.dry_run)
-
-    if args.reset:
-        log.info("Resetting source topics...")
-        gen.reset()
-        log.info("Reset complete.")
+def run(start: datetime, seed: int = SEED, history: bool = True, minutes: int = STREAM_MINUTES,
+        dry_run: bool = False, stream_only: bool = False, agent_offers: bool = False) -> None:
+    plan = build_plan(start, seed, history=history and not stream_only)
+    if agent_offers:
+        live = {passenger.key for passenger in plan.live.passengers}
+        plan.recoveries = [r for r in plan.recoveries if r.passenger.key not in live]
+        logging.info("The recovery agent writes today's offers; the generator writes history only")
+    publisher = Publisher(None if dry_run else extract_kafka_credentials("aws", get_project_root()), dry_run)
+    if not dry_run:
+        stop_previous_stream()
+    if not stream_only:
+        count = 0
+        for topic, key, value in initial_records(plan):
+            publisher.publish(topic, key, value)
+            count += 1
+        publisher.flush()
+        logging.info("Published %d records: %d history days, today, and tomorrow's schedule",
+                     count, len(plan.days) - 1)
+    events = stream_events(plan, minutes)
+    if not events:
         return
+    pid_file = _pid_file()
+    if not dry_run:
+        pid_file.parent.mkdir(exist_ok=True)
+        pid_file.write_text(str(os.getpid()))
+    hero = plan.live.hero
+    logging.info("Streaming %d updates for %d minutes; %s is scheduled at %s UTC",
+                 len(events), minutes, hero.key, f"{hero.scheduled:%H:%M}")
+    try:
+        minute, sent = None, 0
+        for at, topic, key, value in events:
+            if not dry_run:
+                wait = (at - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+                if wait > 0:
+                    time.sleep(wait)
+            publisher.publish(topic, key, value)
+            sent += 1
+            if minute != at.replace(second=0):
+                if minute is not None:
+                    logging.info("%s UTC: %d updates", f"{minute:%H:%M}", sent)
+                minute, sent = at.replace(second=0), 0
+        publisher.flush()
+        logging.info("Stream finished")
+    finally:
+        if not dry_run and pid_file.exists() and pid_file.read_text().strip() == str(os.getpid()):
+            pid_file.unlink()
 
-    if args.phase in ("seed", "all"):
-        gen.seed(args.slip_minutes)
 
-    if args.phase == "all":
-        log.info("Waiting %ds before the slip (let passenger_journey settle to OK)...", args.slip_delay)
-        if not args.dry_run:
-            time.sleep(args.slip_delay)
+def reset(start: datetime, seed: int, dry_run: bool) -> None:
+    publisher = Publisher(None if dry_run else extract_kafka_credentials("aws", get_project_root()), dry_run)
+    if not dry_run:
+        stop_previous_stream()
+    for topic, keys in reset_keys(start, seed).items():
+        for key in sorted(keys):
+            publisher.publish(topic, key, None)
+        logging.info("%s: wrote %d tombstones", topic, len(keys))
+    publisher.flush()
 
-    if args.phase in ("slip", "all"):
-        gen.slip(args.slip_minutes)
 
-    if args.phase == "pivot":
-        gen.pivot()
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="uv run airport-datagen", description="River Air flight recovery data")
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--now", help="ISO-8601 UTC stream start (default: now)")
+    parser.add_argument("--minutes", type=int, default=STREAM_MINUTES,
+                        help=f"minutes of live updates to stream (default: {STREAM_MINUTES}; 0 exits after publishing)")
+    parser.add_argument("--skip-history", action="store_true", help=f"skip the {HISTORY_DAYS} days of history")
+    parser.add_argument("--stream-only", action="store_true",
+                        help="stream the live updates for an earlier --now without republishing")
+    parser.add_argument("--dry-run", action="store_true", help="print records as JSON; no Kafka writes, no waiting")
+    parser.add_argument("--reset", action="store_true", help="write tombstones for every generated key")
+    parser.add_argument("--offers", choices=("auto", "agent", "generator"), default="auto",
+                        help="who writes today's offers (default auto: the agent when Terraform runs it)")
+    args = parser.parse_args(argv)
+    setup_logging()
+    start = _clock(args.now)
+    try:
+        if args.reset:
+            reset(start, args.seed, args.dry_run)
+        else:
+            agent = args.offers == "agent" or (args.offers == "auto" and agent_enabled())
+            run(start, args.seed, history=not args.skip_history, minutes=args.minutes,
+                dry_run=args.dry_run, stream_only=args.stream_only, agent_offers=agent)
+    except KeyboardInterrupt:
+        logging.info("Stopped")
 
 
 if __name__ == "__main__":

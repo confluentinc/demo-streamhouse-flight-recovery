@@ -1,7 +1,9 @@
-CREATE OR ALTER MATERIALIZED TABLE passenger_risk (
+-- One row per passenger. A passenger whose trip ends at the hub has no connection to miss.
+CREATE OR ALTER MATERIALIZED TABLE passenger_state (
   `key` STRING NOT NULL,
   inbound_flight_id STRING,
   connecting_flight_id STRING,
+  final_destination STRING,
   connection_minutes INT,
   risk STRING,
   PRIMARY KEY (`key`) NOT ENFORCED
@@ -17,11 +19,13 @@ AS SELECT
   p.`key`,
   p.inbound_flight_id,
   p.connecting_flight_id,
+  COALESCE(onward.destination, inbound.destination) AS final_destination,
   TIMESTAMPDIFF(MINUTE, inbound.estimated_time, onward.estimated_time) AS connection_minutes,
   CASE
+    WHEN p.connecting_flight_id IS NULL THEN 'NO_CONNECTION'
     WHEN TIMESTAMPDIFF(MINUTE, inbound.estimated_time, onward.estimated_time) < 45 THEN 'HIGH'
     ELSE 'OK'
   END AS risk
-FROM passenger_connections p
+FROM passenger_itineraries p
 JOIN flight_status inbound ON p.inbound_flight_id = inbound.`key`
-JOIN flight_status onward ON p.connecting_flight_id = onward.`key`;
+LEFT JOIN flight_status onward ON p.connecting_flight_id = onward.`key`;

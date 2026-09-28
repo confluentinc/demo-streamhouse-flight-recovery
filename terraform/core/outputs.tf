@@ -130,7 +130,7 @@ output "aws_tableflow_session_token" {
 
 output "aws_tableflow_credentials_present" {
   value       = var.aws_tableflow_access_key != ""
-  description = "True when AWS credentials for the keynote Tableflow S3/Glue path were supplied — gates enable_keynote_analytics in airline-demo, mirroring bedrock_enabled"
+  description = "True when AWS credentials for the Tableflow S3/Glue path were supplied — gates enable_analytics in airline-demo, mirroring bedrock_enabled"
   # Not actually sensitive (it's a boolean), but Terraform propagates the
   # sensitive marking from var.aws_tableflow_access_key since the value
   # is derived from it.

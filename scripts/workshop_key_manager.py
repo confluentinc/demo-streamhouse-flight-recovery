@@ -5,9 +5,9 @@ Workshop Key Manager — create and manage scoped AWS credentials for workshops.
 Lets a workshop organizer mint one AWS IAM user + access key pair, scoped to
 exactly what this demo uses that key for:
   1. Bedrock model invocation, for the recovery streaming agent.
-  2. Provisioning the keynote Tableflow-to-S3/Glue path (Demo 3): an S3
+  2. Provisioning the Tableflow-to-S3/Glue path (Demo 3): an S3
      bucket, a cross-account IAM role, and its S3 + Glue Data Catalog
-     policies (terraform/airline-demo/keynote-analytics.tf).
+     policies (terraform/airline-demo/analytics.tf).
 
 deploy.py writes this same key/secret into both TF_VAR_aws_bedrock_* and
 TF_VAR_aws_tableflow_* (both features use one identity in a demo), so the
@@ -121,14 +121,14 @@ def get_demo_policy(account_id: str, region: str, resource_prefix: str) -> dict:
 
     1. Bedrock model invocation (terraform/core/main.tf bedrock_connection) —
        used directly by Confluent's managed connection, not scoped further.
-    2. Provisioning the keynote Tableflow-to-S3/Glue path (Demo 3, optional):
+    2. Provisioning the Tableflow-to-S3/Glue path (Demo 3, optional):
        an S3 bucket, a cross-account IAM role, and its S3 + Glue policies
-       (terraform/airline-demo/keynote-analytics.tf). The random suffix
+       (terraform/airline-demo/analytics.tf). The random suffix
        terraform appends to resource names isn't known until apply, so these
        are scoped by the `{resource_prefix}-*-...` naming convention instead
        of exact names.
     """
-    bucket_pattern = f"{resource_prefix}-*-keynote-analytics"
+    bucket_pattern = f"{resource_prefix}-*-analytics"
     role_pattern = f"{resource_prefix}-*-tableflow-glue"
     policy_pattern = f"{role_pattern}-*"  # -s3-access / -glue-access
 
@@ -359,7 +359,7 @@ def save_aws_credentials_file(
 ## AWS Access Keys
 
 Use these credentials when running `uv run deploy`. The same key powers both
-the recovery streaming agent (Bedrock) and the keynote Tableflow S3/Glue
+the recovery streaming agent (Bedrock) and the Tableflow S3/Glue
 analytics path (Demo 3) — both optional, both skipped if you leave this blank.
 
 ```
@@ -428,7 +428,7 @@ The api-keys destroy command will:
 **Permissions:**
 - `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` (unscoped)
 - `sts:GetCallerIdentity` (unscoped)
-- S3 create/read/write/delete on bucket `{resource_prefix}-*-keynote-analytics`
+- S3 create/read/write/delete on bucket `{resource_prefix}-*-analytics`
 - IAM create/read/delete on role `{resource_prefix}-*-tableflow-glue` and its policies
 - Glue Data Catalog CRUD on this account's catalog/databases/tables
 

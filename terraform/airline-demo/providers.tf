@@ -21,8 +21,8 @@ provider "confluent" {
 
 # Optional, same pattern as core's Bedrock connection: aws_tableflow_* creds are
 # passed explicitly (never a tracked file) rather than relying on an ambient AWS
-# CLI session. When they're empty, keynote-analytics.tf's resources are all
-# count = 0 (see local.keynote_analytics_enabled in main.tf) and the skip_*
+# CLI session. When they're empty, analytics.tf's resources are all
+# count = 0 (see local.analytics_enabled in main.tf) and the skip_*
 # flags below stop the provider from ever calling AWS (no STS
 # GetCallerIdentity at init). skip_credentials_validation alone isn't enough —
 # the AWS provider still falls through to the ambient SSO/IMDS credential
@@ -34,22 +34,22 @@ provider "confluent" {
 provider "aws" {
   region = data.terraform_remote_state.core.outputs.cloud_region
   access_key = (
-    local.keynote_analytics_enabled
+    local.analytics_enabled
     ? data.terraform_remote_state.core.outputs.aws_tableflow_access_key
-    : "unused-keynote-analytics-disabled"
+    : "unused-analytics-disabled"
   )
   secret_key = (
-    local.keynote_analytics_enabled
+    local.analytics_enabled
     ? data.terraform_remote_state.core.outputs.aws_tableflow_secret_key
-    : "unused-keynote-analytics-disabled"
+    : "unused-analytics-disabled"
   )
   token = (
-    local.keynote_analytics_enabled && data.terraform_remote_state.core.outputs.aws_tableflow_session_token != ""
+    local.analytics_enabled && data.terraform_remote_state.core.outputs.aws_tableflow_session_token != ""
     ? data.terraform_remote_state.core.outputs.aws_tableflow_session_token
     : null
   )
 
-  skip_credentials_validation = !local.keynote_analytics_enabled
-  skip_requesting_account_id  = !local.keynote_analytics_enabled
-  skip_region_validation      = !local.keynote_analytics_enabled
+  skip_credentials_validation = !local.analytics_enabled
+  skip_requesting_account_id  = !local.analytics_enabled
+  skip_region_validation      = !local.analytics_enabled
 }

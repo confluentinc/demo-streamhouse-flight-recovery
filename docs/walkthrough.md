@@ -1,37 +1,49 @@
-# Airport Disruption Recovery — Streamhouse Walkthrough
+# River Air Flight Recovery — Streamhouse Walkthrough
 
-> **Keynote demo:** `uv run airport-datagen` and `uv run airport-app` now run the [keynote data schema](./keynote-data-gen-schemas-erd.md). The older JA417/passenger-journey walkthrough below remains as a legacy reference; use the explicit Python modules shown there.
-
-## Keynote demo run
-
-`uv run deploy` provisions the tables, runs the finite fixture, enables Lightning Tables and RTCE, and offers to start `uv run airport-app`, the operations and passenger view. A separate `uv run airport-datagen` replays the same sequence with 200 passengers, two offers each, and a hotel sellout. Use `--phase seed`, `delay`, `offers`, or `sellout` to rehearse a scene; `--dry-run` prints the records and `--reset` writes tombstones for the fixture keys.
-
-The live keynote demo uses `flight_status`, `passenger_connections`, `hotel_inventory`, `passenger_risk`, `flight_impact`, and `passenger_recommendations`. The seven-column `passenger_itineraries` topic below belongs to the legacy flow. The hosted recovery agent, Webhooks source connector, and S3/Glue/Athena scene are still planned.
-
-## Legacy JA417 walkthrough
-
-In this demo, one inbound flight slips. Flink maintains each passenger's current journey; the app
-reads it through Lightning Tables, and a connected agent can query it through RTCE/MCP. Tableflow
-materializes the served topics as Iceberg tables. Built on [Confluent Cloud for Apache Flink](https://docs.confluent.io/cloud/current/flink/overview.html),
+Built on [Confluent Cloud for Apache Flink](https://docs.confluent.io/cloud/current/flink/overview.html),
 [Lightning Tables](https://docs.confluent.io/cloud/current/lightning/overview.html),
 [RTCE](https://docs.confluent.io/cloud/current/ai/real-time-context-engine/overview.html), and
 [Tableflow](https://docs.confluent.io/cloud/current/topics/tableflow/overview.html).
 
-### What This System Does
+River Air runs 180 flights a day through its SFO hub. Flight RA417 from Chicago slips by nearly two
+hours, and 200 of its passengers miss their connections. The demo has three scenes:
 
-One incident (flight **JA417** slips) puts 12 synthetic connections at risk. The platform:
+1. **Live flights and passengers.** The app reads `flight_impact` and `passenger_state` through
+   Lightning Tables: every flight today, its delay, and how many passengers it puts at risk.
+2. **Connection risk and hotel-aware recovery.** Flink recomputes each connection as flight updates
+   arrive. Each HIGH-risk passenger gets two rebooking offers; overnight ones include a hotel. When
+   Harbor Hotel sells out, the app switches the chosen offer to an available hotel before booking.
+3. **History in Iceberg.** Tableflow writes `flight_impact` and `passenger_recommendations` to
+   Iceberg in S3 with an AWS Glue catalog, and Athena answers: how many flights were delayed in the
+   last 30 days, how many passengers were impacted, what it cost, and how long recovery takes.
 
-1. **Maintains current state** – Flink turns scattered flight/reservation/crew events into one
-   governed table, `passenger_journey`, computing each passenger's `risk` (MISS / TIGHT / OK) with
-   legible SQL — no ML black box.
-2. **Serves apps and agents** – the ops app reads live state over [Lightning Tables](https://docs.confluent.io/cloud/current/lightning/overview.html);
-   an AI agent reads the *same* state over [RTCE/MCP](https://docs.confluent.io/cloud/current/ai/real-time-context-engine/overview.html).
-3. **Acts, then opens history** – a [Streaming Agent](https://docs.confluent.io/cloud/current/ai/streaming-agents/overview.html)
-   drafts each passenger's recovery; an operator approves it (write-back to Kafka); and
-   [Tableflow](https://docs.confluent.io/cloud/current/topics/tableflow/overview.html) lands it all
-   in open Iceberg for analysis.
+The Flink SQL is in [`terraform/airline-demo/sql/`](../terraform/airline-demo/sql/) (files `20`–`25`),
+and the [data model](./data-model.md) explains every field.
 
-The data model and Flink SQL are explained in [`data-model.md`](./data-model.md).
+## Run the demo
+
+`uv run deploy` provisions everything, publishes 30 days of history and today's flights, starts a
+90-minute live stream in the background (log: `tmp/datagen.log`), enables Lightning Tables and RTCE,
+and offers to start the app at http://127.0.0.1:8000.
+
+RA417 is scheduled 50 minutes after the stream starts. Its delay is announced at +5, +15, and +25
+minutes, and Harbor Hotel sells out at +40. To restart the scene, run `uv run airport-datagen`; it
+stops any stream already running, republishes the data, and streams for another 90 minutes. For a
+quicker rehearsal, add `--skip-history`. `--dry-run` prints the records without publishing, and
+`--reset` writes tombstones for every generated key.
+
+In the app, open RA417, pick a passenger, select the Harbor Hotel offer, and book it. After the
+sellout, the app shows the switch to Park Hotel before the booking succeeds.
+
+For Demo 3, enable Tableflow on `passenger_recommendations` on screen (Tableflow on `flight_impact`
+is already enabled by Terraform), then run the Athena queries in the [data model](./data-model.md#work-backwards-from-the-questions).
+Ask the questions as "in the last 30 days"; the data covers a trailing 30-day window.
+
+When core has the Bedrock connection (AWS credentials present), deploy also starts the recovery
+agent. It is Claude on Amazon Bedrock, reading live flights and hotel rooms through RTCE/MCP, and
+it writes the live day's offers ([SQL 26–30](../terraform/airline-demo/sql/)). Without Bedrock,
+the generator writes those offers instead. The Webhooks source connector is still planned, so the
+generator publishes hotel updates directly to Kafka.
 
 ## Prerequisites
 
@@ -54,9 +66,9 @@ winget install astral-sh.uv Git.Git Hashicorp.Terraform ConfluentInc.Confluent-C
 > This repository deploys to AWS `us-east-1`.
 
 - **Confluent Cloud** account with rights to create environments, clusters, Flink pools, and API keys.
-- **AWS Bedrock** (optional) powers the recovery streaming agent. Run `uv run api-keys create` to
-  auto-generate credentials. Without Bedrock, the topic/serving/ops stack still deploys — add the
-  agent later.
+- **AWS credentials** (optional) power the Tableflow S3/Glue analytics scene and core's Bedrock
+  connection. Run `uv run api-keys create` to auto-generate credentials. Without them, everything
+  else still deploys.
 
 > [!WARNING]
 >
@@ -72,120 +84,20 @@ cd demo-streamhouse-flight-recovery
 uv sync
 ```
 
-Deploy the platform (`terraform/core` then `terraform/airline-demo` — cluster, Flink pool, the 7
-tables, the maintained-state SQL, and the recovery agent when Bedrock creds are present):
+Deploy the platform (`terraform/core` then `terraform/airline-demo` — cluster, Flink pool, the
+source tables, `passenger_state`, `flight_impact`, and Tableflow to S3/Glue when AWS creds are present):
 
 ```bash
 uv run deploy
 ```
 
-It prompts for your Confluent Cloud login + API key, (optionally) AWS Bedrock credentials, and which coding agent should get the RTCE MCP server. After Terraform it publishes the keynote data and enables RTCE + Lightning on the demo topics. To re-register the MCP server later, run `uv run setup-rtce`.
+It prompts for your Confluent Cloud login + API key, (optionally) AWS credentials, and which coding agent should get the RTCE MCP server. After Terraform it publishes the demo data, starts the live stream, and enables RTCE + Lightning on the demo topics. To re-register the MCP server later, run `uv run setup-rtce`.
 
 > [!NOTE]
 >
 > Deploy mints an org-wide (Global) API key for the reader service account and writes it to the
 > git-ignored `credentials.env`. It's the key the app and Lightning queries authenticate with —
 > keep it out of screenshots and recordings.
-
-## Usecase Walkthrough
-
-### 1. Generate the incident
-
-```bash
-uv run python -m scripts.airport_datagen  # seed (all OK), wait, then slip JA417
-```
-
-Inbound **JA417 (ORD→SFO)** slips **+35 min**; 12 passengers on 4 onward flights out of SFO flip to
-**9 MISS / 3 TIGHT**. Deterministic: `--seed` controls jitter, and `--now` rebases the clock. Wait
-for Flink to recompute `passenger_journey` and, when configured, for the agent to write `passenger_recovery`.
-
-Other phases: `--phase seed` (steady state), `--phase slip` (fire the cascade), `--phase pivot`
-(replace the PDX recovery option), `--reset` (delete-records the 4 source topics), and `--dry-run`
-(print, connect to nothing).
-
-### 2. Trigger the live-state plot twist
-
-Select Maya Chen (`P-1009`) in the app while her JA540/Kimpton overnight proposal is visible, then run:
-
-```bash
-uv run python -m scripts.airport_datagen --phase pivot
-```
-
-JA512 moves 25 minutes later. Flink recomputes Maya's connection window from 11 to 36 minutes and
-changes Current Passenger State from MISS to TIGHT. That update retriggers the streaming agent, which
-replaces the overnight REBOOK plan with an EXPEDITE plan on Maya's original flight. The app polls
-Lightning Tables every 2.5 seconds; once the replacement lands, it selects Maya and shows both actions
-in a **Current-state change detected** banner. Approve only after EXPEDITE appears.
-
-### 3. Serve the operation (Lightning Tables + act)
-
-```bash
-uv run python -m scripts.airport_app  # http://127.0.0.1:8000
-```
-
-Left = **Operations**: every at-risk passenger + the recommended recovery, each with **Approve**.
-Right = **Passenger**: one passenger's live status + concierge offer. The read path is Lightning
-Queries (the Global key stays server-side). Click **Approve** on a MISS row — it produces an
-`EXECUTED` record back to `passenger_recovery`, which shows up on the next Lightning read: a closed
-loop through the platform. You should see the top-bar counts read `12 · 9 · 3 · 0`, then the
-**Executed** count climb as you approve.
-
-### 4. Serve the agent (RTCE / MCP)
-
-With the MCP server registered (above), ask your coding agent to read the live context. RTCE is
-read-only (no JOINs/aggregations/mutations — do those upstream in Flink):
-
-- `listTopics` — discover the materialized tables.
-- `getMetadata(topic_name="passenger_journey")` — inspect the schema.
-- `queryData(topic_name="passenger_journey", query="…", max_result_rows=N)` — read live rows.
-
-This is a separate agent-context path. The passenger view in `airport-app` reads Lightning
-Queries through its backend; a connected coding agent can query the same enabled topics over MCP.
-
-### 5. Query current state over Lightning directly (optional)
-
-Print a ready-to-run Lightning Queries `curl` for any topic:
-
-```bash
-uv run setup-rtce --lightning passenger_journey                 # scan (LIMIT 10)
-uv run setup-rtce --lightning passenger_journey --key P-1009    # one passenger (point lookup)
-```
-
-> [!WARNING]
->
-> The printed command embeds the Global key. Redirect it to a git-ignored file — don't paste it
-> into a shared terminal or recording.
-
-### 6. Open history with Tableflow
-
-Tableflow enablement is codified in `terraform/airline-demo` (`enable_tableflow`, `tableflow_topics`)
-using **Confluent Managed Storage** — no S3 bucket or IAM to configure. Verify:
-
-```bash
-confluent tableflow topic list --cluster <lkc-…>
-```
-
-All three of `passenger_journey`, `passenger_recovery`, `flight_ops_state` should show `RUNNING`,
-`ICEBERG`, storage `MANAGED`. Current operations stay on Lightning/RTCE; open history lives here.
-
-This repository provisions the Iceberg tables; the command above checks their status. It does not configure
-Databricks, Glue, or an Iceberg query client. To run historical queries, connect a compatible client
-to the managed tables using the [Tableflow documentation](https://docs.confluent.io/cloud/current/topics/tableflow/overview.html).
-An external catalog integration requires additional storage and catalog configuration beyond this demo.
-
-> [!NOTE]
->
-> The Tableflow key is minted on the `app-manager` service account. The RTCE Global key **cannot**
-> enable Tableflow (its reader SA only has `DeveloperRead`).
-
-### Reset between runs
-
-```bash
-uv run python -m scripts.airport_datagen --phase all
-```
-
-Re-runs the scenario and clears `EXECUTED` approvals (the agent re-proposes once each passenger is
-at-risk again). Wait for counts to settle back to `12 · 9 · 3 · 0`.
 
 ## Conclusion
 
@@ -199,16 +111,18 @@ Tables and to a connected agent through RTCE/MCP, and enables Tableflow for Iceb
 
 - **App shows `503 … No RTCE/Lightning Global API key`** — run `uv run setup-rtce`; it writes the
   Global key to `credentials.env`.
-- **`/api/state` empty or all-OK** — datagen hasn't slipped yet, or Flink is catching up. Run
-  `uv run python -m scripts.airport_datagen --phase all` and wait for the updated rows.
-- **`passenger_recovery` empty (no recommended actions)** — Bedrock creds weren't provided at
-  deploy, so the agent was skipped. Re-deploy with Bedrock creds.
+- **`/api/state` empty or no passengers at risk** — the stream hasn't reached RA417's first delay
+  (+5 minutes), the stream has stopped (check `tmp/datagen.log`), or Flink is catching up. Run
+  `uv run airport-datagen` to restart the scene.
+- **Lightning returns at most 200 rows** — every Lightning query is capped at 200 rows, and OFFSET,
+  COUNT, and GROUP BY are rejected. The app filters to one service day (180 flights) and pages
+  larger results by key (`WHERE "KEY" > 'last' ORDER BY "KEY"`).
 - **Lightning `curl` / app read returns 401** — Global key still propagating (retry), or the topic
   lacks `DeveloperRead` for the reader SA.
 - **`queryData` errors on missing args** — pass **all** of `topic_name`, `query`, and
   `max_result_rows`. `getMetadata` takes a single `topic_name` string.
-- **Tableflow topics not listed** — ensure `terraform/airline-demo` applied with
-  `enable_tableflow = true`.
+- **Tableflow topics not listed** — Tableflow needs AWS credentials in core
+  (`aws_tableflow_access_key`) and `enable_analytics = true` in `terraform/airline-demo`.
 - **Targeted Terraform change** — never `apply` the full stack for a targeted change; use `-target`.
 
 </details>
@@ -226,4 +140,4 @@ a recording. Synthetic data only — no real PII; never commit secrets.
 ## Navigation
 
 - **Overview:** [README](../README.md)
-- **Data model + Flink SQL:** [data-model.md](./data-model.md)
+- **Data model:** [data-model.md](./data-model.md)

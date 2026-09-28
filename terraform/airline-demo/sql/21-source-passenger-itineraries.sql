@@ -1,5 +1,5 @@
--- Three-column connection feed; the legacy passenger_itineraries topic has seven columns.
-CREATE TABLE IF NOT EXISTS passenger_connections (
+-- connecting_flight_id is null for a passenger whose trip ends at the hub.
+CREATE TABLE IF NOT EXISTS passenger_itineraries (
   `key` STRING NOT NULL,
   inbound_flight_id STRING,
   connecting_flight_id STRING,

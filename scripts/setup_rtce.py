@@ -16,8 +16,8 @@ Usage:
     uv run setup-rtce               # interactive: prompts for client(s), topics, etc.
     uv run setup-rtce --client codex
     uv run setup-rtce --dry-run     # print what would be registered, touch no agent config
-    uv run setup-rtce --lightning passenger_journey            # curl: scan a served table
-    uv run setup-rtce --lightning passenger_journey --key P-1001  # curl: one passenger
+    uv run setup-rtce --lightning flight_impact                        # curl: scan a served table
+    uv run setup-rtce --lightning passenger_state --key P-0928-417-001  # curl: one passenger
 """
 
 from __future__ import annotations
@@ -25,11 +25,15 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
+import re
 import shlex
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).parent  # scripts/
@@ -51,6 +55,8 @@ _DEFAULT_SERVER_NAME = "confluent-streamhouse-rtce"
 _CRED_KEY = "CONFLUENT_RTCE_API_KEY"
 _CRED_SECRET = "CONFLUENT_RTCE_API_SECRET"
 _CRED_TOPICS = "CONFLUENT_RTCE_TOPICS"
+# The recovery agent's MCP connection; sql/28-tool-live-context.sql uses this name.
+AGENT_CONNECTION = "rtce-connection"
 
 # Terraform output key names from terraform/core state.
 _TF_ORG = "confluent_organization_id"
@@ -138,11 +144,9 @@ def _discover_demo_topics(creds_file: Path) -> list[str]:
             outputs = _read_terraform_outputs(state_path)
             source = outputs.get("source_topics") or []
             served = outputs.get("served_topics") or []
-            keynote_source = outputs.get("keynote_source_topics") or []
-            keynote_served = outputs.get("keynote_served_topics") or []
             # de-dupe while preserving order (sources first, then served)
             seen: dict[str, None] = {}
-            for t in [*source, *served, *keynote_source, *keynote_served]:
+            for t in [*source, *served]:
                 if isinstance(t, str):
                     seen.setdefault(t, None)
             return list(seen)
@@ -212,6 +216,58 @@ def _get_credentials(creds_file: Path, creds: dict) -> tuple[str, str]:
     print(f"✓ Saved credentials to {creds_file}")
 
     return api_key, api_secret
+
+
+def _mcp_url(infra: dict[str, str]) -> str:
+    return (
+        f"https://mcp.{infra['region']}.aws.confluent.cloud/mcp/v1/context-engine"
+        f"/organizations/{infra['org_id']}"
+        f"/environments/{infra['env_id']}"
+        f"/kafka-clusters/{infra['cluster_id']}"
+    )
+
+
+def core_infra(creds_file: Path) -> dict[str, str] | None:
+    """org, environment, cluster, and region from terraform/core state, or None before core exists."""
+    outputs = _read_core_tf_outputs(creds_file)
+    infra = {
+        "org_id": str(outputs.get(_TF_ORG, "")).strip(),
+        "env_id": str(outputs.get(_TF_ENV, "")).strip(),
+        "cluster_id": str(outputs.get(_TF_CLUSTER, "")).strip(),
+        "region": str(outputs.get(_TF_REGION, "")).strip(),
+    }
+    return infra if all(infra.values()) else None
+
+
+def _flink_scope(infra: dict[str, str]) -> list[str]:
+    return ["--cloud", "aws", "--region", infra["region"], "--environment", infra["env_id"]]
+
+
+def agent_connection_exists(infra: dict[str, str]) -> bool:
+    result = subprocess.run(
+        ["confluent", "flink", "connection", "describe", AGENT_CONNECTION, *_flink_scope(infra)],
+        capture_output=True, text=True, timeout=60,
+    )
+    return result.returncode == 0
+
+
+def create_agent_connection(infra: dict[str, str], api_key: str, api_secret: str) -> bool:
+    """Create the recovery agent's MCP connection to RTCE, unless it already exists.
+
+    The CLI, not Terraform, because the provider can't set the streamable HTTP transport
+    RTCE needs. The Global key is Basic auth (username = key, password = secret).
+    """
+    if agent_connection_exists(infra):
+        return True
+    result = subprocess.run(
+        ["confluent", "flink", "connection", "create", AGENT_CONNECTION, *_flink_scope(infra),
+         "--type", "mcp_server", "--endpoint", _mcp_url(infra),
+         "--username", api_key, "--password", api_secret, "--transport-type", "STREAMABLE_HTTP"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0 and result.stderr:
+        print(f"  CLI error: {result.stderr.strip()[:300]}")
+    return result.returncode == 0
 
 
 def _read_terraform_outputs(state_path: Path) -> dict:
@@ -695,29 +751,90 @@ def _parse_topics(raw: str) -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
+_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]*")
+_LIGHTNING_OPS = {"=", "<", "<=", ">", ">=", "IN", "LIKE"}
+# Every Lightning query returns at most this many rows, whatever LIMIT says.
+LIGHTNING_MAX_ROWS = 200
+
+
+def _lightning_identifier(name: str) -> str:
+    if not isinstance(name, str) or not _IDENTIFIER.fullmatch(name):
+        raise ValueError(f"Invalid Lightning identifier: {name!r}")
+    return '"KEY"' if name == "key" else name
+
+
+def _lightning_literal(value) -> str:
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"Unsupported Lightning value: {value!r}")
+    if isinstance(value, (int, float, Decimal)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"Unsupported Lightning value: {value!r}")
+        if isinstance(value, Decimal) and not value.is_finite():
+            raise ValueError(f"Unsupported Lightning value: {value!r}")
+        return str(value)
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return f"TIMESTAMP '{value:%Y-%m-%d %H:%M:%S}'"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _build_lightning_query(
-    topic: str, key: str | None, limit: int,
-    filter_column: str | None = None, filter_value: str | None = None,
+    topic: str,
+    key: str | None = None,
+    limit: int = 10,
+    where=(),
+    order_by: tuple[str, str] | None = None,
 ) -> str:
     """Build the SELECT a Lightning Query runs.
 
-    Default is a small scan of the whole table; passing a KEY narrows it to one row
-    (the per-passenger lookup the demo narrative uses, e.g. --key P-1001).
-    Passenger recommendations also support targeted passenger_id and status filters.
-    The table name is backtick-quoted and the KEY column double-quoted, matching
-    what the Lightning/RTCE SQL surface accepts. Literal quotes are escaped.
+    `where` is a sequence of (column, op, value) conditions joined with AND; op is one
+    of =, <, <=, >, >=, IN (value is a list/tuple) or LIKE. `key` is shorthand for
+    ("key", "=", key). `order_by` is (column, "ASC"|"DESC"). Table and column names
+    must be lowercase identifiers; the table is backtick-quoted and the key column is
+    written "KEY", matching what the Lightning SQL surface accepts. Strings are
+    single-quoted with embedded quotes doubled, numbers are unquoted, and datetimes
+    become TIMESTAMP literals (UTC). Anything else raises ValueError.
+
+    Lightning caps every result at 200 rows and rejects OFFSET, COUNT and GROUP BY,
+    so callers page with `"KEY" > last ORDER BY "KEY"` instead.
     """
-    if filter_column is not None:
-        if topic != "passenger_recommendations" or filter_column not in {"passenger_id", "status"}:
-            raise ValueError("Unsupported Lightning filter")
-        if filter_value is None or key is not None:
-            raise ValueError("Lightning filter requires a value and no key")
-        safe_value = filter_value.replace("'", "''")
-        return f"SELECT * FROM `{topic}` WHERE {filter_column} = '{safe_value}' LIMIT {limit}"
-    if key:
-        safe_key = key.replace("'", "''")
-        return f"SELECT * FROM `{topic}` WHERE \"KEY\" = '{safe_key}' LIMIT {limit}"
-    return f"SELECT * FROM `{topic}` LIMIT {limit}"
+    if not isinstance(topic, str) or not _IDENTIFIER.fullmatch(topic):
+        raise ValueError(f"Invalid Lightning table: {topic!r}")
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise ValueError(f"Invalid Lightning limit: {limit!r}")
+    conditions = [("key", "=", key)] if key is not None else []
+    conditions.extend(where)
+    clauses = []
+    for condition in conditions:
+        try:
+            column, op, value = condition
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid Lightning condition: {condition!r}") from None
+        name = _lightning_identifier(column)
+        op = op.upper() if isinstance(op, str) else op
+        if op not in _LIGHTNING_OPS:
+            raise ValueError(f"Unsupported Lightning operator: {op!r}")
+        if op == "IN":
+            if not isinstance(value, (list, tuple)) or not value:
+                raise ValueError("IN needs a non-empty list or tuple")
+            rendered = "(" + ", ".join(_lightning_literal(v) for v in value) + ")"
+        else:
+            rendered = _lightning_literal(value)
+        clauses.append(f"{name} {op} {rendered}")
+    query = f"SELECT * FROM `{topic}`"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    if order_by is not None:
+        try:
+            column, direction = order_by
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid Lightning order: {order_by!r}") from None
+        direction = direction.upper() if isinstance(direction, str) else direction
+        if direction not in {"ASC", "DESC"}:
+            raise ValueError(f"Invalid Lightning order direction: {direction!r}")
+        query += f" ORDER BY {_lightning_identifier(column)} {direction}"
+    return f"{query} LIMIT {limit}"
 
 
 def lightning_command(
@@ -759,7 +876,7 @@ def lightning_command(
         {
             "catalog_name": env_id,
             "database_name": cluster_id,
-            "query": _build_lightning_query(topic, key, limit),
+            "query": _build_lightning_query(topic, key=key, limit=limit),
         },
         indent=2,
     )
@@ -802,7 +919,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--key",
         metavar="KEY",
-        help="with --lightning: filter the query to one row by its KEY (e.g. --key P-1001)",
+        help="with --lightning: filter the query to one row by its KEY (e.g. --key P-0928-417-001)",
     )
     parser.add_argument(
         "--limit",
@@ -910,12 +1027,7 @@ def main(argv: list[str] | None = None):
 
     token = base64.b64encode(f"{api_key}:{api_secret}".encode()).decode()
 
-    url = (
-        f"https://mcp.{infra['region']}.aws.confluent.cloud/mcp/v1/context-engine"
-        f"/organizations/{infra['org_id']}"
-        f"/environments/{infra['env_id']}"
-        f"/kafka-clusters/{infra['cluster_id']}"
-    )
+    url = _mcp_url(infra)
 
     if client == "none":
         print(f"\n✓ RTCE enabled on: {', '.join(topics)} (no coding agent registered)")

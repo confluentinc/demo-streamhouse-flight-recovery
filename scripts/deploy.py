@@ -5,10 +5,11 @@ Deploy the Streamhouse airline flight-recovery demo to Confluent Cloud.
 Always runs, in order:
   1. terraform/core        — environment, cluster, Flink pool, service accounts,
                              API keys, RTCE reader, (optional) Bedrock connection.
-  2. terraform/airline-demo — the airline Flink pipeline (tables, maintained state,
-                             ops spoke, and the recovery streaming agent when
-                             Bedrock creds are present).
-  3. The keynote data generator (same sequence as `uv run airport-datagen`).
+  2. terraform/airline-demo — the River Air Flink pipeline (source tables,
+                             passenger_state, flight_impact) and, with AWS
+                             creds, Tableflow to Iceberg in S3 with AWS Glue.
+  3. The data generator (same data as `uv run airport-datagen`): 30 days of
+     history and today's flights, then a 90-minute live stream in the background.
   4. Lightning Tables and RTCE on the demo topics, plus the RTCE MCP server for
      the coding agent chosen up front (same as `uv run setup-rtce`).
 
@@ -26,6 +27,7 @@ Usage:
 import argparse
 import getpass
 import os
+import subprocess
 import sys
 import time
 
@@ -45,6 +47,12 @@ from scripts.ui import prompt_with_default
 DEFAULT_REGION = "us-east-1"  # RTCE-supported; Bedrock Claude available here
 DEFAULT_PREFIX = "flight-recovery"
 DEPLOY_TARGETS = ["core", "airline-demo"]
+# The recovery agent's statements in terraform/airline-demo, applied once RTCE is up.
+AGENT_TARGETS = (
+    "confluent_flink_statement.agent_setup",
+    "confluent_flink_statement.recovery_agent",
+    "confluent_flink_statement.recovery_offers",
+)
 
 # Module-level buffer for Plan B fallback when set_key() fails (e.g. Windows locks).
 _pending_writes: dict = {}
@@ -116,6 +124,10 @@ def _flush_pending_writes(creds_file) -> None:
 
 def _deploy(root, targets) -> None:
     print("\n=== Starting Deployment ===")
+    # A redeploy keeps the recovery agent when its RTCE connection already exists.
+    infra = setup_rtce.core_infra(root / "credentials.env")
+    if infra and setup_rtce.agent_connection_exists(infra):
+        os.environ["TF_VAR_enable_recovery_agent"] = "true"
     for env in targets:
         env_path = root / "terraform" / env
         if not env_path.exists():
@@ -234,17 +246,17 @@ def main():
     _save_env_safe(creds_file, "TF_VAR_confluent_cloud_api_key", api_key)
     _save_env_safe(creds_file, "TF_VAR_confluent_cloud_api_secret", api_secret)
 
-    # AWS credentials power the recovery streaming agent (Bedrock) and the
-    # keynote Tableflow S3/Glue analytics path (Demo 3) — both OPTIONAL, and
-    # both use the same identity in a demo, so one credential covers both.
+    # AWS credentials power core's Bedrock connection and the Tableflow S3/Glue
+    # analytics path (Demo 3) — both OPTIONAL, and both use the same identity
+    # in a demo, so one credential covers both.
     # Try the ambient AWS credential chain first: pasting a long temporary
     # session token into a plain terminal prompt can freeze some terminals,
     # and most people running this already have valid AWS creds in their
     # shell (`aws sso login`, env vars, a profile).
     print(
-        "\nAWS credentials power the recovery streaming agent (Bedrock) and the"
-        "\nkeynote Tableflow S3/Glue analytics path (Demo 3). Both are optional —"
-        "\nwithout them, everything else still deploys and those two are skipped."
+        "\nAWS credentials power the Bedrock connection and the Tableflow S3/Glue"
+        "\nanalytics path (Demo 3). Both are optional — without them, everything"
+        "\nelse still deploys and those two are skipped."
     )
     access_key = secret_key = token = ""
     ambient = _detect_ambient_aws_credentials()
@@ -298,12 +310,12 @@ def main():
     api_key_state = "set" if final_creds.get("TF_VAR_confluent_cloud_api_key") else "MISSING"
     print(f"Confluent Cloud API key: {api_key_state}")
     print(f"Confluent CLI auto-login: {'saved' if final_creds.get('CONFLUENT_EMAIL') else 'not saved'}")
-    agent_state = "ENABLED" if final_creds.get("TF_VAR_aws_bedrock_access_key") else "skipped (no Bedrock creds)"
-    print(f"Streaming agent: {agent_state}")
+    bedrock_state = "ENABLED" if final_creds.get("TF_VAR_aws_bedrock_access_key") else "skipped (no Bedrock creds)"
+    print(f"Bedrock connection: {bedrock_state}")
     analytics_state = (
         "ENABLED" if final_creds.get("TF_VAR_aws_tableflow_access_key") else "skipped (no Tableflow AWS creds)"
     )
-    print(f"Keynote S3/Glue analytics (Demo 3): {analytics_state}")
+    print(f"Tableflow S3/Glue analytics (Demo 3): {analytics_state}")
     print(f"Deploying: {', '.join(DEPLOY_TARGETS)}, then demo data and RTCE")
 
     client = setup_rtce._pick_client()
@@ -319,7 +331,7 @@ def main():
     _deploy(root, DEPLOY_TARGETS)
     _finish(root, client)
     if input("\nStart the app at http://127.0.0.1:8000 now? (Y/n): ").strip().lower() in ("", "y"):
-        from scripts.keynote_app import main as run_app
+        from scripts.airport_app import main as run_app
 
         run_app([])
     else:
@@ -327,29 +339,60 @@ def main():
 
 
 def _finish(root, client: str) -> None:
-    """Publish the demo data, then enable Lightning Tables/RTCE on the demo topics."""
+    """Publish the demo data, start the live stream, enable Lightning Tables/RTCE, then the agent."""
+    agent = _bedrock_enabled(root)
     print("\n=== Publishing demo data ===")
-    _run_keynote_datagen()
+    _run_datagen(root, agent)
     print("\n=== Enabling Lightning Tables and RTCE ===")
     setup_rtce.main(["--client", client])
+    if agent:
+        print("\n=== Starting the recovery agent ===")
+        _start_agent(root)
+    else:
+        print("\nRecovery agent: skipped (no Bedrock credentials); the generator writes today's offers.")
     _print_env_name(root)
 
 
-def _run_keynote_datagen() -> None:
-    """Use the same sequence as `uv run airport-datagen` after provisioning."""
-    import time
+def _bedrock_enabled(root) -> bool:
+    core_state = root / "terraform" / "core" / "terraform.tfstate"
+    try:
+        return bool(run_terraform_output(core_state).get("bedrock_enabled"))
+    except Exception:
+        return False
 
+
+def _start_agent(root) -> None:
+    """Create the agent's RTCE connection, then apply only the agent's Flink statements."""
+    creds_file = root / "credentials.env"
+    creds = dotenv_values(str(creds_file))
+    infra = setup_rtce.core_infra(creds_file)
+    key, secret = creds.get("CONFLUENT_RTCE_API_KEY") or "", creds.get("CONFLUENT_RTCE_API_SECRET") or ""
+    started = False
+    if infra and key and secret and setup_rtce.create_agent_connection(infra, key, secret):
+        print(f"✓ Flink connection '{setup_rtce.AGENT_CONNECTION}' reaches RTCE")
+        os.environ["TF_VAR_enable_recovery_agent"] = "true"
+        started = run_terraform(root / "terraform" / "airline-demo", targets=AGENT_TARGETS)
+    if not started:
+        print("⚠ The recovery agent did not start, so today has no offers yet. "
+              "Run `uv run airport-datagen` to have the generator write them.")
+
+
+def _run_datagen(root, agent: bool) -> None:
+    """Publish history and today's flights, then stream live updates in the background.
+
+    When the recovery agent will run, it writes today's offers and the generator skips them.
+    """
     from confluent_kafka.schema_registry import SchemaRegistryClient
 
-    from .keynote_datagen import _clock, run
+    from .airport_datagen import STREAM_MINUTES, _clock, run
     from .terraform import extract_kafka_credentials
 
-    credentials = extract_kafka_credentials("aws", get_project_root())
+    credentials = extract_kafka_credentials("aws", root)
     registry = SchemaRegistryClient({
         "url": credentials["schema_registry_url"],
         "basic.auth.user.info": (
             f"{credentials['schema_registry_api_key']}:{credentials['schema_registry_api_secret']}")})
-    subjects = ("flight_status-value", "passenger_connections-value",
+    subjects = ("flight_status-value", "passenger_itineraries-value",
                 "hotel_inventory-value", "passenger_recommendations-value")
     for attempt in range(30):
         try:
@@ -358,10 +401,19 @@ def _run_keynote_datagen() -> None:
             break
         except Exception:
             if attempt == 29:
-                raise RuntimeError("Keynote schemas did not become ready after deployment") from None
+                raise RuntimeError("Demo schemas did not become ready after deployment") from None
             time.sleep(2)
-    run(_clock(None), seed=42, phases=["seed", "delay", "offers", "sellout"],
-        dry_run=False, pause=15)
+    start = _clock(None)
+    offers = "agent" if agent else "generator"
+    run(start, minutes=0, agent_offers=agent)
+    log = root / "tmp" / "datagen.log"
+    log.parent.mkdir(exist_ok=True)
+    with open(log, "a", encoding="utf-8") as out:
+        subprocess.Popen(
+            ["uv", "run", "airport-datagen", "--now", start.isoformat(), "--stream-only", "--offers", offers],
+            cwd=root, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    print(f"✓ Streaming live flight updates for {STREAM_MINUTES} minutes in the background "
+          f"(log: {log.relative_to(root)}; restart with `uv run airport-datagen`)")
 
 
 def _print_env_name(root) -> None:

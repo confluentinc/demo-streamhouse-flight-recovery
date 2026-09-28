@@ -1,66 +1,179 @@
-# Flight recovery data model
+# River Air flight recovery: data model, generator, and ERD
 
-**Legacy implementation.** The [keynote data schema](./keynote-data-gen-schemas-erd.md) now has executable SQL, a finite generator, and an app. The seven tables below describe the older pipeline that still exists in the deployed environment; they are not the keynote source schema.
+**Status:** Data contract as of 2026-09-28. It matches the Flink SQL in [`terraform/airline-demo/sql/`](../terraform/airline-demo/sql/) (files 20–30) and [`airport_datagen.py`](../scripts/airport_datagen.py). The Webhooks source connector is still planned, so the generator publishes hotel updates directly to Kafka.
 
-The executable definitions are in [the Flink SQL directory](../terraform/airline-demo/sql/). This page explains how the tables fit together and where to change them. For deployment and demo steps, see the [walkthrough](./walkthrough.md).
+## Work backwards from the questions
 
-## Data flow
+Demo 3 asks two historical questions in Athena or Amazon Quick:
 
-```text
-flight_updates ────────┐
-                       ├─> passenger_journey ──> flight_ops_state ──> Lightning Tables ──> operations app
-passenger_itineraries ─┘           │                       ▲
-                                   │                gate_crew_status
-                                   ├─> Lightning Tables ──> operations and passenger views
-                                   ├─> RTCE/MCP ──> a connected coding agent
-                                   ├─> recovery agent ──> passenger_recovery ──> Lightning Tables ──> app
-                                   │          ▲                      │
-                                   │   rebooking_inventory          └─> RTCE/MCP
-                                   └─> Tableflow ──> Iceberg history
+1. *How many flights were delayed in the last 30 days? How many passengers were impacted, and how much did it cost us?*
+2. *What's the average time it takes to recover an impacted passenger?*
+
+Every source field, Flink column, and generator rule below exists to answer those questions, or to show the live scenes that lead up to them.
+
+| Answer | Table (Iceberg via Tableflow) | Definition |
+| --- | --- | --- |
+| Delayed flights | `flight_impact` | `delay_minutes >= 15` |
+| Impacted passengers | `flight_impact` | `sum(affected_passengers)`: passengers whose connection became HIGH risk |
+| Cost | `passenger_recommendations` | `sum(hotel_cost)` of `BOOKED` offers. This is hotel spend only; unselected offers never count |
+| Recovery time | `passenger_recommendations` | `avg(recommended_at - impacted_at)` over `BOOKED` offers |
+
+Recovery time runs from the moment a connection became HIGH risk (`impacted_at`) to the moment the recovery offer was ready (`recommended_at`). It deliberately excludes the customer's decision time: a passenger who waits an hour to tap **Book** does not make River Air look an hour slow.
+
+"Last 30 days" is a trailing window: `scheduled_time >= current_date - INTERVAL '30' DAY` for flights and `recommended_at >= current_date - INTERVAL '30' DAY` for cost.
+
+```sql
+-- Athena, over the Glue database Tableflow syncs into
+SELECT count_if(delay_minutes >= 15) AS delayed_flights,
+       sum(affected_passengers)      AS impacted_passengers
+FROM flight_impact
+WHERE scheduled_time >= current_date - INTERVAL '30' DAY;
+
+SELECT sum(hotel_cost)                                                    AS hotel_cost,
+       avg(to_unixtime(recommended_at) - to_unixtime(impacted_at))        AS avg_recovery_seconds
+FROM passenger_recommendations
+WHERE status = 'BOOKED' AND recommended_at >= current_date - INTERVAL '30' DAY;
 ```
 
-`passenger_journey` is the maintained business entity. It has one keyed row per synthetic passenger. Flink joins the itinerary to the inbound and connecting flight updates, then recalculates the row when either flight changes. The app reads `passenger_journey` and `passenger_recovery` through Lightning Queries. The separate RTCE/MCP path lets a connected coding agent query current context; the passenger view in the app does **not** use MCP.
+With the default seed, the generator produces roughly 1,600 delayed flights, 8,600 impacted passengers, about $550,000 of hotel spend, and an average recovery time of about 23 seconds for the trailing 30 days.
 
-Flink also maintains `flight_ops_state`, one row per connecting flight. It aggregates passenger risk and joins gate and crew status. Lightning Tables serves the resulting rows; it does not perform those joins or aggregates at query time.
+## Source topics
 
-## Tables
+Three source feeds carry the facts shown on screen. The deployed Flink tables call each business ID column `key` because of the raw-key Kafka convention; it is the `flight_id`, `passenger_id`, `hotel_name`, or `offer_id` for that table. All IDs and events are synthetic.
 
-| Table | Key | Contents | Definition |
+### `flight_status` (6 columns)
+
+| Column | Type | Purpose |
+| --- | --- | --- |
+| `flight_id` | STRING, key | One dated flight, for example `RA417-20260928`. |
+| `origin` | STRING | Route shown on screen. |
+| `destination` | STRING | Route shown on screen. |
+| `scheduled_time` | TIMESTAMP | Baseline for delay. |
+| `estimated_time` | TIMESTAMP | Latest estimate, used for delay and connection time. |
+| `status` | STRING | `ON_TIME`, `DELAYED`, `BOARDING`, `DEPARTED`, or `LANDED`. |
+
+Every flight either arrives at or leaves the SFO hub, never both. For an arrival, the two times mean arrival at SFO; for a departure, they mean departure from SFO.
+
+### `passenger_itineraries` (3 columns)
+
+| Column | Type | Purpose |
+| --- | --- | --- |
+| `passenger_id` | STRING, key | Synthetic ID, for example `P-0928-417-001`. |
+| `inbound_flight_id` | STRING | The arrival into SFO. |
+| `connecting_flight_id` | STRING, nullable | The departure the passenger must catch. Null when the trip ends at SFO. |
+
+No names, contact details, or preferences: the join and the risk rule don't need them.
+
+### `hotel_inventory` (3 columns)
+
+| Column | Type | Purpose |
+| --- | --- | --- |
+| `hotel_name` | STRING, key | `Harbor Hotel` or `Park Hotel`, both near SFO. |
+| `available_rooms` | INT | Zero forces a different choice. |
+| `nightly_rate` | DECIMAL(10,2) | $189 and $219; the hotel cost of an overnight rebooking. |
+
+## Computed data products
+
+| Topic | Key | Columns | Producer and use |
 | --- | --- | --- | --- |
-| `flight_updates` | Flight ID | Route, estimated arrival and departure, gate | [01-source-flight-updates.sql](../terraform/airline-demo/sql/01-source-flight-updates.sql) |
-| `passenger_itineraries` | Passenger ID | Synthetic name, inbound and connecting flights, destination, bags, international flag | [02-source-passenger-itineraries.sql](../terraform/airline-demo/sql/02-source-passenger-itineraries.sql) |
-| `rebooking_inventory` | Destination | Next flight, departure, hotel | [03-source-rebooking-inventory.sql](../terraform/airline-demo/sql/03-source-rebooking-inventory.sql) |
-| `gate_crew_status` | Connecting flight ID | Crew duty margin, alternate gate, bag team availability | [04-source-gate-crew-status.sql](../terraform/airline-demo/sql/04-source-gate-crew-status.sql) |
-| `passenger_journey` | Passenger ID | Name, connection, gate, connection math, bags, risk | [05-serving-passenger-journey.sql](../terraform/airline-demo/sql/05-serving-passenger-journey.sql) |
-| `passenger_recovery` | Passenger ID | Agent proposal or executed action, type, status | [06-serving-passenger-recovery.sql](../terraform/airline-demo/sql/06-serving-passenger-recovery.sql) |
-| `flight_ops_state` | Connecting flight ID | Passenger counts, minimum connection window, recommended action | [07-serving-flight-ops-state.sql](../terraform/airline-demo/sql/07-serving-flight-ops-state.sql) |
+| `passenger_state` | `passenger_id` | `inbound_flight_id`, `connecting_flight_id`, `final_destination`, `connection_minutes`, `risk` | Flink joins each itinerary to its inbound flight and (left join) its connecting flight. `risk` is `HIGH` when the estimated connection is under 45 minutes, `OK` otherwise, and `NO_CONNECTION` when the trip ends at SFO. The app's passenger drill-down and the agent trigger read it. |
+| `flight_impact` | `flight_id` | `origin`, `destination`, `scheduled_time`, `status`, `delay_minutes`, `affected_passengers` | Flink computes the delay and counts `HIGH` passengers per inbound flight. It is the operations dashboard's flight list and the Iceberg table for question 1. |
+| `passenger_recommendations` | `offer_id` | `passenger_id`, `recommended_flight_id`, `hotel_name`, `status`, `hotel_cost`, `impacted_at`, `recommended_at` | Two offers (`{passenger_id}-O1`, `-O2`) per HIGH-risk passenger. `hotel_name` and `hotel_cost` are null for a same-day rebooking and set when the wait is six hours or more. Status moves `OFFERED` → `SELECTED` → `BOOKED`; the other offer becomes `CLOSED`. Offers nobody picks are `CLOSED` after 90 minutes. |
 
-Every table has a `key STRING NOT NULL` primary key. Source keys are written by [the data generator](../scripts/airport_datagen.py); derived tables retain or compute keys in Flink. The three served tables use raw Kafka keys, upsert changelogs, and compacted topics. See their SQL definitions for the exact options and field types.
+Flink performs every join and aggregation. Lightning Tables only serves current rows, and RTCE/MCP gives a connected agent the same rows.
 
-## Computation
+**Internal staging table.** `passenger_state_changes` (key `passenger_id`; columns `inbound_flight_id`, `connecting_flight_id`, `final_destination`, `risk`) is an append-only copy of every `passenger_state` change. The recovery agent reads it because `AI_RUN_AGENT` can't read an upsert table. The agent runs once per passenger, the first time they turn HIGH, and that row's `$rowtime` is `impacted_at`. It isn't a data product and isn't on the architecture diagram.
 
-### Passenger journey
+## ERD
 
-[`passenger_journey`](../terraform/airline-demo/sql/05-serving-passenger-journey.sql) is a `CREATE OR ALTER MATERIALIZED TABLE` statement. Its two joins read the inbound arrival and connecting departure from `flight_updates`. A passenger is `MISS` when the estimated inbound arrival plus 30 minutes is later than the connecting departure. Otherwise, the row is `TIGHT` when the gap between arrival and departure is under 45 minutes; all other rows are `OK`. The table also derives `make_connection`, `minutes_to_departure`, `bag_status`, and `needs_recheck`.
+```mermaid
+erDiagram
+    flight_status ||--o{ passenger_itineraries : "inbound flight"
+    flight_status |o--o{ passenger_itineraries : "connecting flight"
+    passenger_itineraries ||--|| passenger_state : "Flink computes"
+    flight_status ||--|| flight_impact : "Flink adds delay and impact"
+    passenger_state }o--|| flight_impact : "HIGH counted per inbound flight"
+    passenger_state ||--o{ passenger_recommendations : "HIGH triggers 2 offers"
+    hotel_inventory |o--o{ passenger_recommendations : "overnight hotel"
 
-These are demo rules, not airline operating policy. The source SQL defines the exact comparison operators and output columns.
+    flight_status {
+        string flight_id PK
+        string origin
+        string destination
+        timestamp scheduled_time
+        timestamp estimated_time
+        string status
+    }
+    passenger_itineraries {
+        string passenger_id PK
+        string inbound_flight_id FK
+        string connecting_flight_id FK "nullable"
+    }
+    hotel_inventory {
+        string hotel_name PK
+        int available_rooms
+        decimal nightly_rate
+    }
+    passenger_state {
+        string passenger_id PK
+        string inbound_flight_id
+        string connecting_flight_id
+        string final_destination
+        int connection_minutes
+        string risk
+    }
+    flight_impact {
+        string flight_id PK
+        string origin
+        string destination
+        timestamp scheduled_time
+        string status
+        int delay_minutes
+        int affected_passengers
+    }
+    passenger_recommendations {
+        string offer_id PK
+        string passenger_id FK
+        string recommended_flight_id
+        string hotel_name FK "nullable"
+        string status
+        decimal hotel_cost "nullable"
+        timestamp impacted_at
+        timestamp recommended_at
+    }
+```
 
-### Flight operations
+`recommended_flight_id` points back to `flight_status`; the ERD leaves out that arrow to stay readable. The [architecture diagram](./architecture.excalidraw) ([PNG](./architecture.png)) shows the same design at system level.
 
-[`flight_ops_state`](../terraform/airline-demo/sql/07-serving-flight-ops-state.sql) is another materialized table. It groups `passenger_journey` by connecting flight, counts `MISS` and `TIGHT` passengers, then joins `gate_crew_status`. Its rule returns `NONE` when no connection is at risk, `HOLD` when crew duty margin is at least 15 minutes, `REGATE` when an alternate gate exists, and `PRIORITY_BAGS` otherwise. The app currently shows passengers and their recovery actions; it does not query this flight rollup.
+## Generator
 
-### Recovery agent and approval
+[`airport_datagen.py`](../scripts/airport_datagen.py) runs behind `uv run airport-datagen`. `uv run deploy` publishes the same data and then starts the live stream in the background.
 
-When Bedrock credentials are configured, Terraform creates the [model](../terraform/airline-demo/sql/10-model-recovery.sql), [agent](../terraform/airline-demo/sql/11-agent-recovery.sql), and [continuous recovery statement](../terraform/airline-demo/sql/12-insert-passenger-recovery.sql). The statement joins at-risk journeys to `rebooking_inventory`, converts inserts and updates to agent triggers with `TO_CHANGELOG`, and writes `PROPOSED` rows to `passenger_recovery`. A changed passenger risk can produce a replacement proposal for the same key. Agent output is generated text, so inspect the resulting action before approving it.
+```bash
+uv run airport-datagen                 # 30 days of history + today, then stream live updates for 90 minutes
+uv run airport-datagen --skip-history  # today only, for a quick rehearsal
+uv run airport-datagen --minutes 0     # publish the current state and exit
+uv run airport-datagen --dry-run --skip-history --minutes 5   # print JSON, no Kafka, no waiting
+uv run airport-datagen --reset         # tombstone every generated key
+```
 
-The app reads the proposal through Lightning Queries. Its **Approve** control writes an `EXECUTED` record to the same keyed Kafka topic; subsequent reads show that status. See [airport_app.py](../scripts/airport_app.py) for the read and write paths.
+`--seed` (default 42) and `--now` make the data reproducible. The same seed and date always produce the same keys and values. Starting a new stream stops one left running by an earlier deploy or run.
 
-## Serving and history
+**Each service day** has 180 River Air flights, so one Lightning query (200-row cap) returns a whole day:
 
-| Consumer | Current implementation |
-| --- | --- |
-| Operations and passenger views | The FastAPI backend reads `passenger_journey` and `passenger_recovery` with Lightning Queries. |
-| Connected coding agent | [`setup-rtce`](../scripts/setup_rtce.py) registers the RTCE MCP server for querying enabled topics. |
-| Historical analysis | [Terraform](../terraform/airline-demo/main.tf) enables Tableflow with Confluent Managed Storage and the Iceberg format for `passenger_journey`, `passenger_recovery`, and `flight_ops_state` by default. |
+- 90 arrivals into SFO from 15 cities between 06:00 and 23:00.
+- 90 departures to the same 15 cities, 6 per destination, between 06:30 and 23:30. The last bank (22:10–23:30) has one departure to each city.
+- 120–180 passengers per arrival. About 30% connect onward with 60–180 minutes to spare; the rest end their trip at SFO.
+- Delays: about 70% of flights are within 15 minutes of schedule, about 25% are 15–60 minutes late, and 10 a day are 90–240 minutes late.
 
-The repository provisions the Iceberg tables but does not configure an external catalog integration or a query client. The [walkthrough](./walkthrough.md#6-open-history-with-tableflow) covers what you can verify after deployment.
+**Realistic updates.** An active flight publishes its current row once a minute, from three hours before departure or arrival until it has departed or landed. Announced delays only grow, in steps: a severe delay is revealed at about 30%, 65%, then 100% of its final length. Near landing, a severely delayed arrival may make up at most three minutes. Status only moves forward. The generator rejects any connection whose risk would change more than once, so a passenger never flips from HIGH back to OK.
+
+**The live day** is shifted so RA417 from Chicago O'Hare is scheduled 50 minutes after the stream starts (template time 21:40). RA417 carries 260 passengers: 200 connect to last-bank departures with 50–110 minutes to spare, and 60 end their trip at SFO. Its delay is announced as 30 minutes at +5 minutes, 75 at +15, and 115 at +25, so the at-risk count climbs from 0 to about 95, then 200. Those passengers can only be rebooked onto tomorrow morning's flights, so each gets two overnight offers: the first with Harbor Hotel ($189) and the second with Park Hotel ($219). Harbor Hotel loses a room a minute and sells out 40 minutes into the stream. RA417's offers stay `OFFERED` for the presenter; the app substitutes an available hotel when the chosen one has sold out.
+
+**Offers** follow the recovery agent's rules ([`sql/29`](../terraform/airline-demo/sql/29-agent-passenger-recovery.sql)). On the live day the agent writes them when Bedrock is set up; otherwise, and for history days, the generator does. Each HIGH-risk passenger gets two offers 5–40 seconds after the flight update that made the connection HIGH risk. The rebookings are the next two departures to the same destination at least 45 minutes after the passenger's arrival. Earlier today and in history, about 85% of passengers book one offer 3–90 minutes later; the rest let both offers close.
+
+**History** covers the 30 days before today, with the same schedule and time shift. It writes each flight's final row, the connecting passengers (the only ones who can be impacted), and completed offers. Tomorrow's schedule is also published so overnight rebookings point to real flights.
+
+## Cost boundary
+
+With only these sources, the defensible cost answer is **hotel spend on booked offers**, not the total cost of rebooking. Keep the on-screen question specific to hotel cost unless another cost source is approved.

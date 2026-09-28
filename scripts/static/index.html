@@ -1,74 +1,39 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Jetstream Airlines Disruption Recovery</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>River Air flight recovery</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="dot"></span>
-      <div>
-        <h1>Jetstream Airlines Disruption Recovery</h1>
-        <p class="sub">One maintained entity — <code>passenger_journey</code> — served to ops and to the passenger.</p>
-      </div>
-    </div>
-    <div class="counts" id="counts"></div>
-  </header>
-
-  <section class="live-update hidden" id="live-update" aria-live="polite">
-    <div>
-      <div class="live-update-kicker">Current-state change detected</div>
-      <strong id="live-update-title"></strong>
-      <p id="live-update-copy"></p>
-    </div>
-    <span class="agent-pivot">Agent pivoted</span>
-  </section>
-
+  <header class="topbar"><div class="brand"><div><h1>River Air flight recovery</h1>
+    <p class="sub">Live flight status, connection risk, and passenger offers (times in UTC)</p></div></div>
+    <div class="counts" id="counts"></div></header>
   <main class="split">
-    <!-- Ops dashboard -->
-    <section class="panel" id="ops">
-      <div class="panel-head">
-        <h2>Operations</h2>
-        <span class="src">via Lightning Tables (REST)</span>
-      </div>
-      <div class="table-wrap">
-        <table id="ops-table">
-          <thead>
-            <tr>
-              <th>Passenger</th>
-              <th>Connection</th>
-              <th>To</th>
-              <th>Dep</th>
-              <th>Risk</th>
-              <th>Recommended action</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="ops-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Passenger card -->
-    <section class="panel narrow" id="passenger">
-      <div class="panel-head">
-        <h2>Passenger</h2>
-        <span class="src" id="pax-src">select a passenger</span>
-      </div>
-      <div id="pax-card" class="pax-empty">
-        <p>Select a passenger from the operations view to see their live status and concierge recovery offer.</p>
-      </div>
-    </section>
+    <div class="stack">
+      <section class="panel"><div class="panel-head"><h2>Operations</h2><span class="src">Lightning Tables</span></div>
+        <div class="table-wrap scroll"><table><thead><tr><th>Flight</th><th>Route</th><th>Scheduled</th><th>Status</th>
+          <th>Delay (min)</th><th>At risk</th></tr></thead>
+        <tbody id="flights"></tbody></table></div>
+      </section>
+      <section class="panel"><div class="panel-head"><h2 id="flight-title">Flight passengers</h2><span class="src" id="flight-sub"></span></div>
+        <div id="flight-empty" class="pax-empty">Select a flight.</div>
+        <div class="table-wrap scroll hidden" id="flight-table"><table><thead><tr><th>Passenger</th><th>Going to</th>
+          <th>Connection</th><th>Minutes</th><th>Risk</th></tr></thead>
+        <tbody id="passengers"></tbody></table></div>
+      </section>
+    </div>
+    <div class="stack">
+      <section class="panel"><div class="panel-head"><h2>Biggest delays</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Flight</th><th>Route</th><th>Delay (min)</th><th>At risk</th></tr></thead>
+        <tbody id="delays"></tbody></table></div>
+      </section>
+      <section class="panel"><div class="panel-head"><h2>Passenger recovery</h2></div>
+        <div id="passenger-card" class="pax-empty">Select a passenger.</div></section>
+    </div>
   </main>
-
-  <footer class="foot">
-    <span id="status-line">Loading…</span>
-    <button id="refresh" class="ghost">Refresh</button>
-  </footer>
-
+  <footer class="foot"><span id="status-line">Loading…</span><button id="refresh" class="ghost">Refresh</button></footer>
   <script src="/static/app.js"></script>
 </body>
 </html>

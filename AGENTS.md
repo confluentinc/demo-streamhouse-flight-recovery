@@ -4,33 +4,33 @@ Instructions for AI coding agents and contributors working in this repository. `
 
 ## Project mission
 
-This repository contains the older airline demo and the new keynote demo. The [keynote data schema](./docs/keynote-data-gen-schemas-erd.md) is the current narrative contract. The executable keynote SQL is in `terraform/airline-demo/sql/20` through `25`; `uv run airport-datagen` and `uv run airport-app` now run the keynote fixture and app. `CLAUDE.md` links to this file.
+This repository is the River Air flight recovery demo on Confluent Cloud. The demo script is the source of truth for the story; the [data model](./docs/data-model.md) is the data contract that serves it. The Flink SQL is in `terraform/airline-demo/sql/20` through `30`; `uv run airport-datagen` and `uv run airport-app` run the generator and app.
 
-## Keynote direction
+## Demo direction
 
-* Use the current script's three demo scenes: live flight and passenger queries, Flink connection risk with hotel-aware recovery, then Tableflow to Iceberg and AWS Glue/Athena for a historical question.
-* Use three source feeds: `flight_status`, three-column `passenger_connections`, and `hotel_inventory`. The connection name avoids the deployed seven-column legacy `passenger_itineraries` topic. Keep `keynote` out of topic names. Add a field only when a named scene, calculation, or query needs it.
-* Keep the hotel availability change and the passenger recovery visible. The keynote generator currently emits two deterministic offers; the app checks hotel inventory through Lightning before selection and booking. The planned agent uses a model hosted in Confluent and reads hotel context through RTCE/MCP. Do not present the older Bedrock agent as that keynote flow.
-* Treat the older `passenger_journey`, gate/crew, rebooking-inventory, approval, and Maya pivot story as the current implementation or historical planning, depending on the document. They are not the approved keynote script.
-* Use the [keynote data schema](./docs/keynote-data-gen-schemas-erd.md) and [simple architecture diagram](./docs/keynote-architecture.excalidraw) as the keynote design references before changing executable schemas.
-* Keep the keynote generator behind `uv run airport-datagen`. `uv run deploy` runs the same finite sequence after provisioning, then enables Lightning Tables and RTCE. People run only `uv run deploy`; its `--automated`/`--testing` flags are for bots. Use targeted Terraform apply for incremental changes to an existing deployment.
+* Use the script's three demo scenes: live flight and passenger queries, Flink connection risk with hotel-aware recovery, then Tableflow to Iceberg and AWS Glue/Athena for the historical questions.
+* Work backwards from those questions (delayed flights, impacted passengers, and hotel cost in the last 30 days; average recovery time). Add a field only when a named scene, calculation, or query needs it.
+* Use three source feeds: `flight_status`, `passenger_itineraries` (three columns; `connecting_flight_id` is null when the trip ends at SFO), and `hotel_inventory`. Flink produces `passenger_state` and `flight_impact`; offers go to `passenger_recommendations`.
+* Keep the hotel availability change and the passenger recovery visible. Each HIGH-risk passenger gets two offers; the app checks hotel inventory through Lightning before selection and booking. The recovery agent (`sql/26`–`30`) writes the live day's offers. It uses Claude on Amazon Bedrock, because Streaming Agents don't support the Confluent-hosted models, and reads flights and hotels through RTCE/MCP. It needs core's Bedrock connection; without that, and for history days, the generator writes the same offers. `AI_RUN_AGENT` reads only append-only input, so it reads the `passenger_state_changes` staging table rather than the upsert `passenger_state`.
+* Recovery time is `recommended_at - impacted_at`; it excludes the customer's decision time.
+* Keep the generator behind `uv run airport-datagen`. `uv run deploy` publishes the same data, starts the 90-minute live stream in the background, then enables Lightning Tables and RTCE. People run only `uv run deploy`; its `--automated`/`--testing` flags are for bots. Use targeted Terraform apply for incremental changes to an existing deployment.
 
 ## Technical boundaries
 
 * Run joins, aggregations, enrichment, and complex computation in Flink, not Lightning Tables.
 * The app reads current state through Lightning Tables; connected agents can query it through RTCE/MCP.
-* In this deployment, an unfiltered Lightning scan returned only 200 rows even with `LIMIT 500`. Query passenger offers by `passenger_id` and booked offers by `status` so the app does not silently omit later passengers.
-* The current deployment uses Tableflow with managed Iceberg storage on older topics. The keynote script calls for Iceberg in S3 with AWS Glue/Athena; that integration is planned, not deployed here. No Webhooks source connector is deployed yet; the generator publishes hotel rows directly.
+* Every Lightning query returns at most 200 rows, even with `LIMIT 500` or a filter, and OFFSET, COUNT, and GROUP BY are rejected. Keep one service day at 180 flights so a single windowed query returns it, and page anything larger by key (`WHERE "KEY" > 'last' ORDER BY "KEY" LIMIT 200`).
+* Tableflow writes Iceberg to a customer-owned S3 bucket with an AWS Glue catalog when AWS credentials are present (`terraform/airline-demo/analytics.tf`). No Webhooks source connector is deployed yet; the generator publishes hotel rows directly.
 * Use synthetic data only; no real passenger/customer PII.
 * Keep secrets and internal material out of tracked files.
 
 ## Repository layout
 
-* [`scripts/`](./scripts/) — one flat Python package: deploy/destroy, credential and Terraform helpers, RTCE setup, keynote generator/app, and retained legacy generator/app.
+* [`scripts/`](./scripts/) — one flat Python package: deploy/destroy, credential and Terraform helpers, RTCE setup, the generator (`airport_datagen.py`), and the app (`airport_app.py`, `static/`).
 * [`terraform/core/`](./terraform/core/) — Confluent Cloud environment, cluster, Flink pool, service accounts, keys, optional Bedrock connection.
-* [`terraform/airline-demo/`](./terraform/airline-demo/) — the demo pipeline: source tables, maintained state, serving tables, recovery streaming agent (Flink SQL in `sql/`). Separate root because its provider reads core's outputs.
-* [`tests/`](./tests/) — pytest + `node --test` suites.
-* [`docs/`](./docs/) — walkthrough, legacy data model, and keynote data contract.
+* [`terraform/airline-demo/`](./terraform/airline-demo/) — the demo pipeline (Flink SQL in `sql/`) and Tableflow to S3/Glue. Separate root because its provider reads core's outputs.
+* [`tests/`](./tests/) — pytest suites.
+* [`docs/`](./docs/) — walkthrough, data model, and architecture diagram.
 
 Entry points are defined in [`pyproject.toml`](./pyproject.toml) (`uv run deploy`, `uv run airport-datagen`, `uv run airport-app`, ...). Add to an existing module before creating a new directory.
 
@@ -55,4 +55,4 @@ Before merging a change:
 * Does the app read through Lightning Tables and the connected agent through RTCE/MCP?
 * Can the demo run without a fragile third-party dependency?
 * Can someone outside the core team deploy and understand it from the README?
-* `uv run pytest`, `node --test tests/test-app-pivot.js`, and `uv run ruff check scripts tests` pass.
+* `uv run pytest` and `uv run ruff check scripts tests` pass.
