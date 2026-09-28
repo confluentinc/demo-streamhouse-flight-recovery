@@ -9,11 +9,11 @@ near landing), so a flight never goes from hours late back to on time.
 
 The generator writes two rebooking offers a few seconds after a connection becomes HIGH
 risk. Past bookings are completed the way customers would complete them; RA417's offers
-stay open for the presenter. When the recovery agent runs in Flink (sql/26-30), it writes
-the live day's offers and the generator writes only history offers.
+stay open for the presenter. When the recovery agent runs in Flink (sql/26-31), it writes
+RA417's offers and the generator writes every other flight's.
 
     uv run airport-datagen                  # history + live day, then stream 90 minutes
-    uv run airport-datagen --offers generator  # write today's offers even if the agent runs
+    uv run airport-datagen --offers generator  # write RA417's offers even if the agent runs
     uv run airport-datagen --minutes 0      # publish the current state and exit
     uv run airport-datagen --dry-run --skip-history --minutes 5
     uv run airport-datagen --reset          # tombstone every generated key
@@ -516,9 +516,8 @@ def run(start: datetime, seed: int = SEED, history: bool = True, minutes: int = 
         dry_run: bool = False, stream_only: bool = False, agent_offers: bool = False) -> None:
     plan = build_plan(start, seed, history=history and not stream_only)
     if agent_offers:
-        live = {passenger.key for passenger in plan.live.passengers}
-        plan.recoveries = [r for r in plan.recoveries if r.passenger.key not in live]
-        logging.info("The recovery agent writes today's offers; the generator writes history only")
+        plan.recoveries = [r for r in plan.recoveries if r.passenger.inbound is not plan.live.hero]
+        logging.info("The recovery agent writes %s's offers; the generator writes the rest", plan.live.hero.key)
     publisher = Publisher(None if dry_run else extract_kafka_credentials("aws", get_project_root()), dry_run)
     if not dry_run:
         stop_previous_stream()
@@ -583,7 +582,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--dry-run", action="store_true", help="print records as JSON; no Kafka writes, no waiting")
     parser.add_argument("--reset", action="store_true", help="write tombstones for every generated key")
     parser.add_argument("--offers", choices=("auto", "agent", "generator"), default="auto",
-                        help="who writes today's offers (default auto: the agent when Terraform runs it)")
+                        help="who writes RA417's offers (default auto: the agent when Terraform runs it)")
     args = parser.parse_args(argv)
     setup_logging()
     start = _clock(args.now)

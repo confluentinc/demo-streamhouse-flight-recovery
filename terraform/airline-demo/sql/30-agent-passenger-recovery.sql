@@ -1,12 +1,13 @@
 -- The recovery agent. It reads live flight times and hotel rooms through the Real-Time
 -- Context Engine, picks two rebooking offers, and answers in one line that
--- sql/30-insert-passenger-recommendations.sql parses. The rules match the generator's
--- stand-in offers in scripts/airport_datagen.py. handle_exception = continue means a
--- passenger whose agent run fails gets no offers instead of stopping the statement.
+-- sql/31-insert-passenger-recommendations.sql parses. The rules match the generator's
+-- stand-in offers in scripts/airport_datagen.py. handle_exception = continue means
+-- passengers whose agent run fails get no offers instead of stopping the statement.
 -- IF NOT EXISTS keeps an existing agent as is: DROP AGENT before re-applying an edit.
 CREATE AGENT IF NOT EXISTS passenger_recovery_agent
 USING MODEL passenger_recovery_model
-USING PROMPT 'You are the River Air recovery agent at SFO. The passenger in the task will miss a connection.
+USING PROMPT 'You are the River Air recovery agent at SFO. The passengers on the inbound flight in the task
+will miss their connections to the final destination, and they all get the same two offers.
 Use the queryData tool (arguments: topic_name, query, max_result_rows) to run the three queries in the task.
 The queries already use the right column names, so run them as given without calling getMetadata first.
 

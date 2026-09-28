@@ -167,6 +167,8 @@ def _offer_keys(capsys, **kwargs):
     return [row["key"] for row in rows if row["topic"] == g.OFFERS]
 
 
-def test_agent_writes_todays_offers_instead_of_the_generator(capsys):
-    assert any(key.startswith("P-0928-417-") for key in _offer_keys(capsys))
-    assert _offer_keys(capsys, agent_offers=True) == []
+def test_agent_writes_ra417_offers_instead_of_the_generator(capsys):
+    hero = f"P-0928-{g.HERO_NUMBER}-"
+    assert any(key.startswith(hero) for key in _offer_keys(capsys))
+    offers = _offer_keys(capsys, agent_offers=True)
+    assert offers and not any(key.startswith(hero) for key in offers)

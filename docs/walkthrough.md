@@ -41,8 +41,8 @@ Ask the questions as "in the last 30 days"; the data covers a trailing 30-day wi
 
 When core has the Bedrock connection (AWS credentials present), deploy also starts the recovery
 agent. It is Claude on Amazon Bedrock, reading live flights and hotel rooms through RTCE/MCP, and
-it writes the live day's offers ([SQL 26–30](../terraform/airline-demo/sql/)). Without Bedrock,
-the generator writes those offers instead. The Webhooks source connector is still planned, so the
+it writes the live day's offers for RA417 ([SQL 26–31](../terraform/airline-demo/sql/)). The generator
+writes every other flight's offers, and RA417's too without Bedrock. The Webhooks source connector is still planned, so the
 generator publishes hotel updates directly to Kafka.
 
 ## Prerequisites

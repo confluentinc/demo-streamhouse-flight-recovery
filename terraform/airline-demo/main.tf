@@ -11,8 +11,8 @@
 #   + the passenger_recommendations table   (for_each, parallel)
 #     -> passenger_state MATERIALIZED TABLE -> flight_impact MATERIALIZED TABLE
 #   recovery agent (gated, see local.agent_enabled):
-#     passenger_state -> passenger_state_changes (append) ─┐
-#     model -> live_context tool -> agent ──────────────────┴-> INSERT INTO passenger_recommendations
+#     passenger_state -> passenger_state_changes -> impacted_passengers (append) ─┐
+#     model -> live_context tool -> agent ─────────────────────────────────────────┴-> INSERT INTO passenger_recommendations
 #
 # The two derived serving tables (passenger_state, flight_impact) are
 # MATERIALIZED TABLES: one object owning both the table and its continuous query,
@@ -61,8 +61,8 @@ locals {
 
   agent_setup = {
     passenger_state_changes = "sql/26-staging-passenger-state-changes.sql"
-    model                   = "sql/27-model-passenger-recovery.sql"
-    tool                    = "sql/28-tool-live-context.sql"
+    model                   = "sql/28-model-passenger-recovery.sql"
+    tool                    = "sql/29-tool-live-context.sql"
   }
 }
 
@@ -139,8 +139,9 @@ resource "confluent_flink_statement" "flight_impact" {
 
 # --- Recovery agent (gated on Bedrock + the RTCE connection) ----------------
 # The append-only change table, the model, and the RTCE tool have no
-# interdependencies. The agent needs the model and tool; the INSERT needs the
-# agent, the change table, and passenger_recommendations.
+# interdependencies. impacted_passengers reads the change table. The agent needs
+# the model and tool; the INSERT needs the agent, impacted_passengers, and
+# passenger_recommendations.
 resource "confluent_flink_statement" "agent_setup" {
   for_each = local.agent_enabled ? local.agent_setup : {}
 
@@ -161,6 +162,26 @@ resource "confluent_flink_statement" "agent_setup" {
   depends_on = [confluent_flink_statement.passenger_state]
 }
 
+resource "confluent_flink_statement" "impacted_passengers" {
+  count = local.agent_enabled ? 1 : 0
+
+  organization { id = data.confluent_organization.main.id }
+  environment { id = local.core.confluent_environment_id }
+  compute_pool { id = local.core.confluent_flink_compute_pool_id }
+  principal { id = local.core.app_manager_service_account_id }
+  rest_endpoint = local.rest_endpoint
+  credentials {
+    key    = local.core.app_manager_flink_api_key
+    secret = local.core.app_manager_flink_api_secret
+  }
+
+  statement_name = "airport-agent-impacted-passengers"
+  statement      = file("${path.module}/sql/27-staging-impacted-passengers.sql")
+  properties     = local.sql_props
+
+  depends_on = [confluent_flink_statement.agent_setup]
+}
+
 resource "confluent_flink_statement" "recovery_agent" {
   count = local.agent_enabled ? 1 : 0
 
@@ -175,7 +196,7 @@ resource "confluent_flink_statement" "recovery_agent" {
   }
 
   statement_name = "airport-agent-passenger-recovery"
-  statement      = file("${path.module}/sql/29-agent-passenger-recovery.sql")
+  statement      = file("${path.module}/sql/30-agent-passenger-recovery.sql")
   properties     = local.sql_props
 
   depends_on = [confluent_flink_statement.agent_setup]
@@ -195,10 +216,14 @@ resource "confluent_flink_statement" "recovery_offers" {
   }
 
   statement_name = "airport-agent-insert-passenger-recommendations"
-  statement      = file("${path.module}/sql/30-insert-passenger-recommendations.sql")
+  statement      = file("${path.module}/sql/31-insert-passenger-recommendations.sql")
   properties     = local.sql_props
 
-  depends_on = [confluent_flink_statement.tables, confluent_flink_statement.recovery_agent]
+  depends_on = [
+    confluent_flink_statement.tables,
+    confluent_flink_statement.impacted_passengers,
+    confluent_flink_statement.recovery_agent,
+  ]
 }
 
 # --- Tableflow API key ------------------------------------------------------

@@ -50,6 +50,7 @@ DEPLOY_TARGETS = ["core", "airline-demo"]
 # The recovery agent's statements in terraform/airline-demo, applied once RTCE is up.
 AGENT_TARGETS = (
     "confluent_flink_statement.agent_setup",
+    "confluent_flink_statement.impacted_passengers",
     "confluent_flink_statement.recovery_agent",
     "confluent_flink_statement.recovery_offers",
 )
@@ -349,7 +350,7 @@ def _finish(root, client: str) -> None:
         print("\n=== Starting the recovery agent ===")
         _start_agent(root)
     else:
-        print("\nRecovery agent: skipped (no Bedrock credentials); the generator writes today's offers.")
+        print("\nRecovery agent: skipped (no Bedrock credentials); the generator writes all offers.")
     _print_env_name(root)
 
 
@@ -373,14 +374,14 @@ def _start_agent(root) -> None:
         os.environ["TF_VAR_enable_recovery_agent"] = "true"
         started = run_terraform(root / "terraform" / "airline-demo", targets=AGENT_TARGETS)
     if not started:
-        print("⚠ The recovery agent did not start, so today has no offers yet. "
-              "Run `uv run airport-datagen` to have the generator write them.")
+        print("⚠ The recovery agent did not start, so RA417 has no offers yet. "
+              "Run `uv run airport-datagen --offers generator` to have the generator write them.")
 
 
 def _run_datagen(root, agent: bool) -> None:
     """Publish history and today's flights, then stream live updates in the background.
 
-    When the recovery agent will run, it writes today's offers and the generator skips them.
+    When the recovery agent will run, it writes RA417's live offers and the generator skips them.
     """
     from confluent_kafka.schema_registry import SchemaRegistryClient
 

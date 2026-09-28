@@ -55,7 +55,7 @@ _DEFAULT_SERVER_NAME = "confluent-streamhouse-rtce"
 _CRED_KEY = "CONFLUENT_RTCE_API_KEY"
 _CRED_SECRET = "CONFLUENT_RTCE_API_SECRET"
 _CRED_TOPICS = "CONFLUENT_RTCE_TOPICS"
-# The recovery agent's MCP connection; sql/28-tool-live-context.sql uses this name.
+# The recovery agent's MCP connection; sql/29-tool-live-context.sql uses this name.
 AGENT_CONNECTION = "rtce-connection"
 
 # Terraform output key names from terraform/core state.
