@@ -155,6 +155,21 @@ def test_book_rejects_sold_out_hotel(fake):
     assert error.value.status_code == 409
 
 
+def test_passenger_returns_offers_and_hotel_options_cheapest_first(fake):
+    fake.tables["passenger_state"] = [{"key": "P-0928-417-001", "risk": "HIGH"}]
+    fake.tables["passenger_recommendations"] = [
+        _offer("P-0928-417-001-O2", "Park Hotel", "219.00"),
+        _offer("P-0928-417-001-O1", "Harbor Hotel", "189.00"),
+    ]
+    fake.tables["hotel_inventory"] = list(reversed(HOTELS))
+    body = TestClient(airport_app.app).get("/api/passenger/P-0928-417-001").json()
+    assert [row["key"] for row in body["offers"]] == ["P-0928-417-001-O1", "P-0928-417-001-O2"]
+    assert body["hotels"] == [
+        {"key": "Harbor Hotel", "available_rooms": 0, "nightly_rate": "189.00"},
+        {"key": "Park Hotel", "available_rooms": 4, "nightly_rate": "219.00"},
+    ]
+
+
 def test_select_and_book_offer_without_hotel(fake):
     fake.tables["hotel_inventory"] = [{**row, "available_rooms": "0"} for row in HOTELS]
     fake.tables["passenger_recommendations"] = [_offer("P-0928-417-001-O1", None, None)]

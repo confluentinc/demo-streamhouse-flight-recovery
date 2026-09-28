@@ -181,6 +181,12 @@ def _hotels() -> dict[str, dict]:
     return {row["key"]: row for row in _rows("hotel_inventory")}
 
 
+def _hotel_options() -> list[dict]:
+    """Every hotel's rooms left and rate, cheapest first (the order select_offer substitutes in)."""
+    return sorted(({**row, "available_rooms": _int(row.get("available_rooms"))} for row in _hotels().values()),
+                  key=lambda row: Decimal(str(row["nightly_rate"])))
+
+
 def _flight(row: dict) -> dict:
     return {**row, "delay_minutes": _int(row.get("delay_minutes")),
             "affected_passengers": _int(row.get("affected_passengers"))}
@@ -228,7 +234,7 @@ def passenger(passenger_id: str):
     rows = _rows("passenger_state", key=passenger_id, limit=1)
     if not rows:
         raise HTTPException(status_code=404, detail="Passenger not found")
-    return {"passenger": rows[0], "offers": _passenger_offers(passenger_id)}
+    return {"passenger": rows[0], "offers": _passenger_offers(passenger_id), "hotels": _hotel_options()}
 
 
 @app.post("/api/passenger/{passenger_id}/select/{offer_id}")
