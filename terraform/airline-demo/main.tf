@@ -51,8 +51,9 @@ locals {
   # apply. aws_tableflow_credentials_present is a boolean, not a secret, but
   # Terraform marks it sensitive anyway since it's derived from
   # var.aws_tableflow_access_key — nonsensitive() is needed because
-  # count/for_each can't take a sensitive value.
-  analytics_enabled = var.enable_analytics && nonsensitive(local.core.aws_tableflow_credentials_present)
+  # count/for_each can't take a sensitive value. try() treats a core state from
+  # before this output existed as "no creds", so plan and destroy still work.
+  analytics_enabled = var.enable_analytics && try(nonsensitive(local.core.aws_tableflow_credentials_present), false)
 
   # The recovery agent needs Claude on Bedrock (core) and the RTCE connection, which
   # `uv run deploy` creates with the CLI after RTCE is enabled and then sets the toggle.

@@ -37,6 +37,41 @@ def test_agent_reply_contract_matches_the_parser():
     assert fields == parsed == {"FLIGHT", "HOTEL", "COST"}
 
 
+def test_tool_and_agent_use_only_supported_options():
+    tool_options = set(re.findall(r"'(\w+)' = ", _sql("28")))
+    assert tool_options <= {"type", "allowed_tools", "request_timeout", "max_retries", "headers"}
+    assert "'handle_exception' = 'continue'" in _sql("29")
+
+
+class _Run:
+    """Stands in for subprocess.run and records each CLI call."""
+
+    def __init__(self, stdout="", returncode=0):
+        self.calls, self.stdout, self.returncode = [], stdout, returncode
+
+    def __call__(self, cmd, **_):
+        self.calls.append(cmd)
+        return type("Result", (), {"stdout": self.stdout, "stderr": "", "returncode": self.returncode})()
+
+
+def test_stale_rtce_key_is_detected(monkeypatch):
+    run = _Run(stdout='[{"key": "NEWKEY"}]')
+    monkeypatch.setattr(setup_rtce.subprocess, "run", run)
+    assert setup_rtce._key_owned_by("sa-1", "NEWKEY")
+    assert not setup_rtce._key_owned_by("sa-1", "OLDKEY")
+
+
+def test_existing_agent_connection_gets_the_current_key(monkeypatch):
+    run = _Run()
+    monkeypatch.setattr(setup_rtce.subprocess, "run", run)
+    infra = {"env_id": "env-1", "region": "us-east-1", "org_id": "o", "cluster_id": "lkc-1"}
+    assert setup_rtce.create_agent_connection(infra, "KEY", "SECRET")
+    update = run.calls[-1]
+    assert update[:4] == ["confluent", "flink", "connection", "update"]
+    assert update[update.index("--username") + 1] == "KEY"
+    assert update[update.index("--transport-type") + 1] == "STREAMABLE_HTTP"
+
+
 def test_deploy_targets_exist_and_sql_files_exist():
     main = (DEMO / "main.tf").read_text()
     for target in deploy.AGENT_TARGETS:

@@ -6,6 +6,5 @@ USING CONNECTION `rtce-connection`
 WITH (
   'type' = 'mcp',
   'allowed_tools' = 'getMetadata,queryData',
-  'description' = 'River Air live data: flight_status for flight times, hotel_inventory for rooms and nightly rates.',
   'request_timeout' = '30'
 );

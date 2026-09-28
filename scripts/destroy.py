@@ -198,9 +198,13 @@ def main():
             print(f"  ⚠ Destroy failed but --force set: cleaning local state for {env}")
             cleanup_terraform_artifacts(env_path)
         else:
+            # Destroying core after a failed airline-demo destroy deletes the environment
+            # underneath airline-demo's state, so the next deploy fails with 401s.
             print(
-                f"\n✗ Destroy failed at {env}. Use --force to clean local state anyway. Continuing..."
+                f"\n✗ Destroy failed at {env}. Stopping so later environments keep their state. "
+                "Fix the error and rerun, or use --force to clean local state anyway."
             )
+            sys.exit(1)
 
     _cleanup_mcp(root)
 

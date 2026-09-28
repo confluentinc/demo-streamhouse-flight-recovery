@@ -195,6 +195,19 @@ def _create_rtce_global_key_via_cli(sa_id: str) -> tuple[str, str]:
     return api_key, api_secret
 
 
+def _key_owned_by(sa_id: str, api_key: str) -> bool:
+    """True when api_key is one of sa_id's Global keys. A teardown deletes the service
+    account and its keys, but credentials.env keeps the old key."""
+    result = subprocess.run(
+        ["confluent", "api-key", "list", "--resource", "global", "--service-account", sa_id, "-o", "json"],
+        capture_output=True, text=True, timeout=60,
+    )
+    try:
+        return any(k.get("key") == api_key for k in json.loads(result.stdout or "[]"))
+    except (json.JSONDecodeError, AttributeError):
+        return True  # can't tell; keep the stored key and let the MCP check report it
+
+
 def _get_credentials(creds_file: Path, creds: dict) -> tuple[str, str]:
     api_key = creds.get(_CRED_KEY, "").strip()
     api_secret = creds.get(_CRED_SECRET, "").strip()
@@ -252,13 +265,20 @@ def agent_connection_exists(infra: dict[str, str]) -> bool:
 
 
 def create_agent_connection(infra: dict[str, str], api_key: str, api_secret: str) -> bool:
-    """Create the recovery agent's MCP connection to RTCE, unless it already exists.
+    """Create the recovery agent's MCP connection to RTCE, or refresh its key if it exists.
 
     The CLI, not Terraform, because the provider can't set the streamable HTTP transport
     RTCE needs. The Global key is Basic auth (username = key, password = secret).
     """
     if agent_connection_exists(infra):
-        return True
+        result = subprocess.run(
+            ["confluent", "flink", "connection", "update", AGENT_CONNECTION, *_flink_scope(infra),
+             "--username", api_key, "--password", api_secret, "--transport-type", "STREAMABLE_HTTP"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0 and result.stderr:
+            print(f"  CLI error: {result.stderr.strip()[:300]}")
+        return result.returncode == 0
     result = subprocess.run(
         ["confluent", "flink", "connection", "create", AGENT_CONNECTION, *_flink_scope(infra),
          "--type", "mcp_server", "--endpoint", _mcp_url(infra),
@@ -944,12 +964,16 @@ def main(argv: list[str] | None = None):
     creds_file = _find_credentials_file()
     creds = _load_env_file(creds_file)
 
-    # Auto-create a Global API key when none is stored in credentials.env.
+    # Auto-create a Global API key when none is stored in credentials.env, or when the
+    # stored one belongs to a service account from an earlier deployment.
     # Terraform provisions the service account + role bindings; this script creates
     # the Global key (--resource global) via CLI, which the Terraform provider can't do.
+    sa_id = _read_core_tf_outputs(creds_file).get(_TF_RTCE_SA_ID, "").strip()
+    stored = creds.get(_CRED_KEY, "").strip()
+    if stored and sa_id and not args.dry_run and not _key_owned_by(sa_id, stored):
+        print(f"Stored RTCE key {stored[:8]}... is not a key of {sa_id} (earlier deployment).")
+        creds[_CRED_KEY] = creds[_CRED_SECRET] = ""
     if not creds.get(_CRED_KEY) and not args.dry_run:
-        tf_outputs = _read_core_tf_outputs(creds_file)
-        sa_id = tf_outputs.get(_TF_RTCE_SA_ID, "").strip()
         if sa_id:
             print(
                 f"Creating Global API key for RTCE service account {sa_id} via CLI..."
