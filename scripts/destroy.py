@@ -70,6 +70,37 @@ def cleanup_terraform_artifacts(env_path: Path) -> None:
         pass
 
 
+# Confluent can keep listing a Tableflow topic as a user of the provider
+# integration after Tableflow is gone, sometimes for good, so deleting it returns
+# 409 "integration is being used in some confluent resource". Deleting the
+# environment removes the integration regardless, so when it's all that's left
+# in airline-demo's state, drop it from state and let core's destroy take it.
+TABLEFLOW_PROVIDER_INTEGRATION = "confluent_provider_integration.tableflow[0]"
+
+
+def release_provider_integration(env_path: Path) -> bool:
+    """Drop the provider integration from state if it's the only resource left."""
+    listed = subprocess.run(
+        ["terraform", "state", "list"], cwd=env_path, capture_output=True, text=True
+    )
+    if listed.returncode != 0:
+        return False
+    managed = [r for r in listed.stdout.split() if not r.startswith("data.")]
+    if managed != [TABLEFLOW_PROVIDER_INTEGRATION]:
+        return False
+
+    removed = subprocess.run(
+        ["terraform", "state", "rm", TABLEFLOW_PROVIDER_INTEGRATION], cwd=env_path
+    )
+    if removed.returncode != 0:
+        return False
+    print(
+        "  ⚠ Confluent still lists the Tableflow provider integration as in use; "
+        "core's destroy deletes it with the environment"
+    )
+    return True
+
+
 def _cleanup_mcp(root: Path) -> None:
     """Remove MCP server config and registration if MCP was installed."""
     mcp_env = root / "terraform" / "core" / "confluent-mcp.env"
@@ -192,7 +223,11 @@ def main():
             continue
 
         print(f"\n→ Destroying {env}...")
-        if run_terraform_destroy(env_path):
+        destroyed = run_terraform_destroy(env_path)
+        if not destroyed and env == "airline-demo" and release_provider_integration(env_path):
+            destroyed = run_terraform_destroy(env_path)
+
+        if destroyed:
             cleanup_terraform_artifacts(env_path)
         elif args.force:
             print(f"  ⚠ Destroy failed but --force set: cleaning local state for {env}")

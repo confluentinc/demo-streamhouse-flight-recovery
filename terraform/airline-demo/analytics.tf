@@ -32,6 +32,9 @@ locals {
 resource "aws_s3_bucket" "analytics" {
   count  = local.analytics_enabled ? 1 : 0
   bucket = local.analytics_bucket_name
+  # This stack creates the bucket for this deployment, and Tableflow fills it
+  # with Iceberg files, so destroy empties it rather than failing on BucketNotEmpty.
+  force_destroy = true
 }
 
 resource "confluent_provider_integration" "tableflow" {
