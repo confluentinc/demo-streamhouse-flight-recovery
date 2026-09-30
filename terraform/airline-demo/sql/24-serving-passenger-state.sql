@@ -2,7 +2,9 @@
 CREATE OR ALTER MATERIALIZED TABLE passenger_state (
   `key` STRING NOT NULL,
   inbound_flight_id STRING,
+  inbound_seat STRING,
   connecting_flight_id STRING,
+  connecting_seat STRING,
   final_destination STRING,
   connection_minutes INT,
   risk STRING,
@@ -18,7 +20,9 @@ START_MODE = FROM_BEGINNING
 AS SELECT
   p.`key`,
   p.inbound_flight_id,
+  p.inbound_seat,
   p.connecting_flight_id,
+  p.connecting_seat,
   COALESCE(onward.destination, inbound.destination) AS final_destination,
   TIMESTAMPDIFF(MINUTE, inbound.estimated_time, onward.estimated_time) AS connection_minutes,
   CASE

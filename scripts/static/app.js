@@ -7,6 +7,7 @@ let current = { flights: [], delays: [], counts: {} };
 let openFlight = null;
 let selected = null;
 let lastUpdated = null;
+let scrollToNow = true; // on load and after "Show all", scroll Operations to the flights around now
 const rowWatermarks = new Map(); // key -> "status|delay_minutes|affected_passengers", for flash-on-change
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -47,6 +48,9 @@ function hhmm(value) {
   return match ? match[1] : String(value);
 }
 
+// Lightning's "2026-09-25 01:00:00.000000" and the API's ISO "now" are both UTC.
+const utcMs = (value) => Date.parse(`${String(value).slice(0, 19).replace(" ", "T")}Z`);
+
 const riskClass = (risk) => ({ HIGH: "MISS", OK: "OK" }[risk] || "other");
 const label = (value) => String(value ?? "").replace(/_/g, " "); // ON_TIME -> ON TIME, display only
 
@@ -78,8 +82,11 @@ function selectFlight(flightId) {
   clearPassenger();
   if (flightId === null || flightId === openFlight) {
     openFlight = null;
+    scrollToNow = true;
     $("flight-empty").classList.remove("hidden");
     $("flight-table").classList.add("hidden");
+    $("seat-map").classList.add("hidden");
+    $("seat-tip").classList.add("hidden");
     render();
     return;
   }
@@ -96,6 +103,8 @@ function selectPassenger(passengerId) {
   else { selected = passengerId; renderPassenger(); }
   document.querySelectorAll("[data-passenger]").forEach((button) =>
     button.closest("tr").classList.toggle("selected", button.dataset.passenger === selected));
+  document.querySelectorAll("#cabin .seat").forEach((seat) =>
+    seat.classList.toggle("selected", seatHolders.get(seat.dataset.seat)?.key === selected));
 }
 
 function clearPassenger() {
@@ -150,6 +159,7 @@ function render() {
     <td>${esc(row.delay_minutes)}</td><td>${esc(row.affected_passengers)}</td></tr>`).join("");
   shownFlights.forEach((row) =>
     flashIfChanged($(`flight-row-${row.key}`), `flight:${row.key}`, `${row.status}|${row.delay_minutes}|${row.affected_passengers}`));
+  if (scrollToNow && !openFlight) scrollFlightsToNow();
 
   $("delays").innerHTML = current.delays.map((row) => `<tr id="delay-row-${esc(row.key)}" class="${rowClass(row.key)}">
     <td>${flightButton(row.key)}${impactTag(row.key)}</td>
@@ -163,6 +173,16 @@ function render() {
   FlightMap.renderFlightMap("#flight-map", current.flights, { highlightKey: impactKey, focusedKey: openFlight, onSelect: selectFlight });
 }
 
+// The list starts 18 hours back, so put the first flight scheduled from 30 minutes ago at the top.
+function scrollFlightsToNow() {
+  const since = utcMs(current.now) - 30 * 60 * 1000;
+  const row = $("flights").rows[current.flights.findIndex((flight) => utcMs(flight.scheduled_time) >= since)];
+  if (!row) return;
+  const wrap = row.closest(".table-wrap");
+  wrap.scrollTop = row.offsetTop - wrap.querySelector("thead").offsetHeight;
+  scrollToNow = false;
+}
+
 async function refreshFlight(opening = false) {
   if (!openFlight) return;
   const flightId = openFlight;
@@ -174,26 +194,121 @@ async function refreshFlight(opening = false) {
     return;
   }
   if (flightId !== openFlight) return;
-  const { flight, passengers } = body;
+  const { flight, passengers, seats } = body;
   $("flight-title").textContent = `${flight.key} passengers`;
   $("flight-sub").textContent = `${flight.origin} → ${flight.destination} · ${flight.status} · `
     + `${flight.delay_minutes} min delay · est. ${hhmm(flight.estimated_time)}`;
   $("flight-empty").classList.add("hidden");
+  $("seat-map").classList.remove("hidden");
   $("flight-table").classList.remove("hidden");
   if (opening) {
-    $("flight-table").classList.remove("reveal");
-    // eslint-disable-next-line no-unused-expressions
-    $("flight-table").offsetWidth; // restart the CSS animation
-    $("flight-table").classList.add("reveal");
+    ["seat-map", "flight-table"].forEach((id) => {
+      $(id).classList.remove("reveal");
+      // eslint-disable-next-line no-unused-expressions
+      $(id).offsetWidth; // restart the CSS animation
+      $(id).classList.add("reveal");
+    });
   }
+  // A departure's passengers are the ones connecting onto it, so show where they fly in from.
+  $("other-flight-head").textContent = flight.arrival ? "Connection" : "Arriving on";
   $("passengers").innerHTML = passengers.map((row) => `<tr class="${row.key === selected ? "selected" : ""}">
     <td><button class="link" data-passenger="${esc(row.key)}">${esc(row.key)}</button></td>
-    <td>${esc(row.final_destination ?? "—")}</td>
-    <td>${esc(row.connecting_flight_id ?? "—")}</td><td>${esc(row.connection_minutes ?? "—")}</td>
+    <td>${esc(row.seat ?? "—")}</td><td>${esc(row.final_destination ?? "—")}</td>
+    <td>${esc((flight.arrival ? row.connecting_flight_id : row.inbound_flight_id) ?? "—")}</td>
+    <td>${esc(row.connection_minutes ?? "—")}</td>
     <td><span class="risk ${riskClass(row.risk)}">${esc(label(row.risk))}</span></td></tr>`).join("");
   document.querySelectorAll("[data-passenger]").forEach((button) =>
     button.onclick = () => selectPassenger(button.dataset.passenger));
+  renderSeats(flight.key, seats, passengers);
 }
+
+// --- Seat map ----------------------------------------------------------------
+// Every flight uses the generator's one seat layout (SEATS, sent with each
+// flight), drawn top-down with the nose on the left: D-F above the aisle and
+// A-C below it, as seen from above. First rows seat 2-2 in the space of three.
+
+let seatHolders = new Map(); // seat -> passenger_state row on the open flight
+let seatFlight = null; // the flight seatHolders belongs to
+
+function buildCabin(seats) {
+  const rows = new Map();
+  seats.forEach((seat) => {
+    const row = parseInt(seat, 10);
+    rows.set(row, [...(rows.get(row) || []), seat]);
+  });
+  const side = (content) => `<div class="seat-side">${content}</div>`;
+  const seatCells = (rowSeats, letters) => rowSeats.filter((seat) => letters.includes(seat.slice(-1))).reverse()
+    .map((seat) => `<div class="seat" data-seat="${esc(seat)}"></div>`).join("");
+  const letterCells = (letters) => letters.map((letter) => `<span>${letter}</span>`).join("");
+  $("cabin").innerHTML = `<div class="seat-row cabin-letters" aria-hidden="true">
+      ${side(letterCells(["F", "E", "D"]))}<span class="row-num"></span>${side(letterCells(["C", "B", "A"]))}</div>`
+    + [...rows].map(([row, rowSeats]) => `<div class="seat-row${rowSeats.length === 4 ? " first" : ""}">
+      ${side(seatCells(rowSeats, "DEF"))}<span class="row-num">${row}</span>${side(seatCells(rowSeats, "ABC"))}</div>`)
+      .join("");
+  $("cabin").dataset.built = "1";
+}
+
+function renderSeats(flightId, seats, passengers) {
+  if (!$("cabin").dataset.built) buildCabin(seats);
+  const sameFlight = seatFlight === flightId;
+  seatFlight = flightId;
+  seatHolders = new Map(passengers.filter((row) => row.seat).map((row) => [row.seat, row]));
+  const counts = { miss: 0, ok: 0, open: 0 };
+  document.querySelectorAll("#cabin .seat").forEach((el) => {
+    const holder = seatHolders.get(el.dataset.seat);
+    const state = !holder ? "open" : holder.risk === "HIGH" ? "miss" : "ok";
+    counts[state] += 1;
+    // Pulse a seat whose risk changed since the last poll, like the flashing table rows.
+    const flip = sameFlight && el.dataset.state !== state;
+    el.dataset.state = state;
+    el.className = ["seat", state, holder && holder.key === selected && "selected", flip && "flip"]
+      .filter(Boolean).join(" ");
+    el.setAttribute("aria-label", holder ? `Seat ${el.dataset.seat}, ${holder.key}, ${label(holder.risk)}`
+      : `Seat ${el.dataset.seat}, open`);
+  });
+  Object.entries(counts).forEach(([state, count]) => { $(`seats-${state}`).textContent = count; });
+  const hovered = document.querySelector("#cabin .seat:hover");
+  if (hovered && !$("seat-tip").classList.contains("hidden")) showSeatTip(hovered);
+}
+
+// Styled like the flight map's info box; fixed to the viewport so the
+// scrolling rail and panel edges never clip it.
+function showSeatTip(el) {
+  const seat = el.dataset.seat;
+  const holder = seatHolders.get(seat);
+  const cabin = el.closest(".seat-row").classList.contains("first") ? "First" : "Economy";
+  const line = (name, value, valueClass = "") => `<div class="infobox-row"><span class="infobox-label">${esc(name)}</span>
+    <span class="infobox-value ${valueClass}">${value}</span></div>`;
+  const flightSeat = (flight, flightSeatId) => `${esc(flight)} · ${esc(flightSeatId ?? "—")}`;
+  const tip = $("seat-tip");
+  tip.innerHTML = !holder
+    ? `<div class="infobox-title">Seat ${esc(seat)}</div><div class="infobox-route">${cabin} · Open</div>`
+    : `<div class="infobox-title">${esc(holder.key)}</div>
+      <div class="infobox-route">Seat ${esc(seat)} · ${cabin}</div>
+      ${line("Inbound", flightSeat(holder.inbound_flight_id, holder.inbound_seat))}
+      ${line("Connection", holder.connecting_flight_id
+        ? flightSeat(holder.connecting_flight_id, holder.connecting_seat) : "Trip ends at SFO")}
+      ${line("Going to", esc(holder.final_destination ?? "—"))}
+      ${holder.connecting_flight_id ? line("Time to connect", `${esc(holder.connection_minutes ?? "—")} min`,
+        holder.risk === "HIGH" ? "miss" : "") : ""}
+      ${line("Risk", `<span class="risk ${riskClass(holder.risk)}">${esc(label(holder.risk))}</span>`)}`;
+  tip.classList.remove("hidden");
+  const rect = el.getBoundingClientRect(), gap = 10;
+  const width = tip.offsetWidth, height = tip.offsetHeight;
+  tip.style.left = `${Math.max(8, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 8))}px`;
+  tip.style.top = `${rect.top - gap - height >= 8 ? rect.top - gap - height : rect.bottom + gap}px`;
+}
+
+$("cabin").addEventListener("mouseover", (event) => {
+  const seat = event.target.closest(".seat");
+  if (seat) showSeatTip(seat);
+  else $("seat-tip").classList.add("hidden");
+});
+$("cabin").addEventListener("mouseleave", () => $("seat-tip").classList.add("hidden"));
+$("cabin").addEventListener("click", (event) => {
+  const holder = seatHolders.get(event.target.closest(".seat")?.dataset.seat);
+  if (holder) selectPassenger(holder.key);
+});
 
 async function renderPassenger() {
   const card = $("passenger-card");
@@ -273,9 +388,19 @@ function tickLiveDot() {
   $("live-dot").classList.toggle("stale", Date.now() - lastUpdated > 6000);
 }
 
+// Skips a poll while the previous one is still waiting, so slow Lightning reads can't pile up.
+function onePending(poll) {
+  let pending = false;
+  return async () => {
+    if (pending) return;
+    pending = true;
+    try { await poll(); } finally { pending = false; }
+  };
+}
+
 $("refresh").onclick = () => { refresh(); refreshFlight(); renderPassenger(); };
 $("map-show-all").onclick = () => selectFlight(null);
 refresh();
-window.setInterval(refresh, 2500);
-window.setInterval(() => { refreshFlight(); renderPassenger(); }, 5000);
+window.setInterval(onePending(refresh), 2500);
+window.setInterval(onePending(() => Promise.all([refreshFlight(), renderPassenger()])), 2500);
 window.setInterval(tickLiveDot, 1000);

@@ -12,6 +12,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -22,7 +23,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from scripts import setup_rtce as rtce
-from scripts.airport_datagen import OFFERS, Publisher
+from scripts.airport_datagen import HUB, OFFERS, SEATS, Publisher
 from scripts.terraform import extract_kafka_credentials, get_project_root
 
 STATIC = Path(__file__).parent / "static"
@@ -115,6 +116,7 @@ class Deployment:
 
 
 deployment = Deployment()
+_pool = ThreadPoolExecutor(max_workers=8)  # runs a request's independent Lightning reads side by side
 _publisher: Publisher | None = None
 app = FastAPI(title="River Air flight recovery", docs_url=None, redoc_url=None)
 
@@ -187,21 +189,26 @@ def _hotel_options() -> list[dict]:
                   key=lambda row: Decimal(str(row["nightly_rate"])))
 
 
-def _flight(row: dict) -> dict:
-    return {**row, "delay_minutes": _int(row.get("delay_minutes")),
-            "affected_passengers": _int(row.get("affected_passengers"))}
+def _flights(key: str | None = None, limit: int = PAGE_SIZE, where=(), order_by=None) -> list[dict]:
+    """Status and delay from flight_status (live within seconds) plus flight_impact's at-risk count (about a minute)."""
+    impact = _pool.submit(_rows, "flight_impact", key, limit, where, order_by)
+    flights = []
+    for row in _rows("flight_status", key=key, limit=limit, where=where, order_by=order_by):
+        scheduled, estimated = _timestamp(row.get("scheduled_time")), _timestamp(row.get("estimated_time"))
+        delay = round((estimated - scheduled) / timedelta(minutes=1)) if scheduled and estimated else 0
+        flights.append({**row, "estimated_time": estimated, "delay_minutes": delay})
+    affected = {row["key"]: _int(row.get("affected_passengers")) for row in impact.result()}
+    return [{**row, "affected_passengers": affected.get(row["key"], 0)} for row in flights]
 
 
 @app.get("/api/state")
 def state():
     now = _now()
-    flights = [_flight(row) for row in _rows(
-        "flight_impact",
-        where=[("scheduled_time", ">=", now - WINDOW_BEFORE), ("scheduled_time", "<", now + WINDOW_AFTER)],
-        order_by=("scheduled_time", "ASC"),
-    )]
-    booked = deployment.lightning_scan(
-        OFFERS, where=[("status", "=", "BOOKED"), ("recommended_at", ">=", now - WINDOW_BEFORE)])
+    booked = _pool.submit(deployment.lightning_scan, OFFERS,
+                          [("status", "=", "BOOKED"), ("recommended_at", ">=", now - WINDOW_BEFORE)])
+    window = [("scheduled_time", ">=", now - WINDOW_BEFORE), ("scheduled_time", "<", now + WINDOW_AFTER)]
+    flights = _flights(where=window, order_by=("scheduled_time", "ASC"))
+    booked = booked.result()
     delays = sorted(flights, key=lambda row: (-row["delay_minutes"], row.get("key") or ""))[:10]
     return {
         "now": now,
@@ -218,15 +225,18 @@ def state():
 
 @app.get("/api/flight/{flight_id}")
 def flight(flight_id: str):
-    rows = _rows("flight_impact", key=flight_id, limit=1)
+    rows = _flights(key=flight_id, limit=1)
     if not rows:
         raise HTTPException(status_code=404, detail="Flight not found")
-    passengers = deployment.lightning_scan("passenger_state", where=[("inbound_flight_id", "=", flight_id)])
+    row = rows[0]
+    row["arrival"] = row.get("destination") == HUB
+    # An arrival carries its passengers' inbound leg; a departure carries the ones connecting onto it.
+    leg = "inbound" if row["arrival"] else "connecting"
+    passengers = deployment.lightning_scan("passenger_state", where=[(f"{leg}_flight_id", "=", flight_id)])
+    for passenger in passengers:
+        passenger["seat"] = passenger.get(f"{leg}_seat")
     passengers.sort(key=lambda row: (row.get("risk") != "HIGH", row.get("key") or ""))
-    row = _flight(rows[0])
-    scheduled = _timestamp(row.get("scheduled_time"))
-    row["estimated_time"] = scheduled + timedelta(minutes=row["delay_minutes"]) if scheduled else None
-    return {"flight": row, "passengers": passengers}
+    return {"flight": row, "passengers": passengers, "seats": SEATS}
 
 
 @app.get("/api/passenger/{passenger_id}")

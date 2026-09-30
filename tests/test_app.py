@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -207,20 +207,28 @@ def test_write_offer_passes_nulls_and_parses_timestamps(monkeypatch):
     assert second["recommended_at"] == datetime(2026, 9, 21, 14, 13, 20)
 
 
-def _flight(n, scheduled, delay, affected, status="ON_TIME"):
-    return {"key": f"RA{n}-20260928", "origin": "SFO", "destination": "SEA",
-            "scheduled_time": scheduled, "status": status,
-            "delay_minutes": str(delay), "affected_passengers": str(affected)}
+def _flight(n, scheduled, delay, affected, status="ON_TIME", origin="SFO", destination="SEA"):
+    """The flight's flight_status row and its flight_impact row, as Lightning returns them."""
+    row = {"key": f"RA{n}-20260928", "origin": origin, "destination": destination, "scheduled_time": scheduled}
+    estimated = datetime.fromisoformat(scheduled) + timedelta(minutes=delay)
+    return ({**row, "estimated_time": f"{estimated:%Y-%m-%d %H:%M:%S}.000000", "status": status},
+            {**row, "status": status, "delay_minutes": str(delay), "affected_passengers": str(affected)})
+
+
+def _set_flights(fake, *flights):
+    fake.tables["flight_status"] = [status for status, _ in flights]
+    fake.tables["flight_impact"] = [impact for _, impact in flights]
 
 
 def test_state_counts_and_delays(fake):
-    fake.tables["flight_impact"] = [
+    _set_flights(
+        fake,
         _flight(100, "2026-09-27 17:00:00.000000", 90, 50),  # before the 18h window
         _flight(417, "2026-09-28 11:00:00.000000", 95, 260, "DELAYED"),
         _flight(418, "2026-09-28 13:00:00.000000", 15, 3, "DELAYED"),
         _flight(419, "2026-09-28 09:00:00.000000", 14, 0),
         _flight(420, "2026-09-28 18:00:00.000000", 5, 0),  # at now+6h, excluded
-    ] + [_flight(500 + n, f"2026-09-28 {n % 10:02d}:30:00.000000", 0, 1) for n in range(12)]
+        *(_flight(500 + n, f"2026-09-28 {n % 10:02d}:30:00.000000", 0, 1) for n in range(12)))
     fake.tables["passenger_recommendations"] = [
         {"key": f"P-{n}-O1", "status": "BOOKED", "recommended_at": "2026-09-28 08:00:00.000000"}
         for n in range(205)
@@ -235,24 +243,54 @@ def test_state_counts_and_delays(fake):
     assert body["flights"][0]["delay_minutes"] == 0 and isinstance(body["flights"][0]["affected_passengers"], int)
     assert [row["key"] for row in body["delays"][:3]] == ["RA417-20260928", "RA418-20260928", "RA419-20260928"]
     assert len(body["delays"]) == 10
-    impact_call = next(call for call in fake.calls if call["topic"] == "flight_impact")
-    assert impact_call["order_by"] == ("scheduled_time", "ASC")
+    for topic in ("flight_status", "flight_impact"):
+        assert next(call for call in fake.calls if call["topic"] == topic)["order_by"] == ("scheduled_time", "ASC")
+
+
+def test_flights_show_live_status_and_delay_with_flinks_at_risk_count(fake):
+    status, impact = _flight(417, "2026-09-28 11:00:00.000000", 30, 7, "DELAYED", origin="ORD", destination="SFO")
+    fake.tables["flight_status"] = [status]
+    fake.tables["flight_impact"] = [{**impact, "status": "ON_TIME", "delay_minutes": "0"}]  # a minute behind
+    body = TestClient(airport_app.app).get("/api/state").json()
+    assert [(row["status"], row["delay_minutes"], row["affected_passengers"]) for row in body["flights"]] == [
+        ("DELAYED", 30, 7)]
+    assert body["counts"]["delayed"] == 1
+
+
+def _passenger(n, inbound, connecting, risk):
+    return {"key": f"P-0928-{n}", "inbound_flight_id": inbound, "inbound_seat": f"{n % 30 + 1}A",
+            "connecting_flight_id": connecting, "connecting_seat": f"{n % 30 + 1}F" if connecting else None,
+            "risk": risk}
+
+
+PASSENGERS = [
+    _passenger(1, "RA417-20260928", "RA680-20260928", "OK"),
+    _passenger(2, "RA417-20260928", "RA680-20260928", "HIGH"),
+    _passenger(3, "RA417-20260928", None, "NO_CONNECTION"),
+    _passenger(4, "RA417-20260928", "RA684-20260928", "HIGH"),
+    _passenger(5, "RA418-20260928", "RA680-20260928", "HIGH"),
+]
 
 
 def test_flight_passengers_high_risk_first(fake):
-    fake.tables["flight_impact"] = [_flight(417, "2026-09-28 11:00:00.000000", 95, 2, "DELAYED")]
-    fake.tables["passenger_state"] = [
-        {"key": "P-0928-417-001", "inbound_flight_id": "RA417-20260928", "risk": "OK"},
-        {"key": "P-0928-417-002", "inbound_flight_id": "RA417-20260928", "risk": "HIGH"},
-        {"key": "P-0928-417-003", "inbound_flight_id": "RA417-20260928", "risk": "NO_CONNECTION"},
-        {"key": "P-0928-417-004", "inbound_flight_id": "RA417-20260928", "risk": "HIGH"},
-        {"key": "P-0928-418-001", "inbound_flight_id": "RA418-20260928", "risk": "HIGH"},
-    ]
+    _set_flights(fake, _flight(417, "2026-09-28 11:00:00.000000", 95, 2, "DELAYED", origin="ORD", destination="SFO"))
+    fake.tables["passenger_state"] = PASSENGERS
     client = TestClient(airport_app.app)
     body = client.get("/api/flight/RA417-20260928").json()
     assert body["flight"]["delay_minutes"] == 95
     assert body["flight"]["estimated_time"] == "2026-09-28T12:35:00"
-    assert [row["key"] for row in body["passengers"]] == [
-        "P-0928-417-002", "P-0928-417-004", "P-0928-417-001", "P-0928-417-003"]
+    assert body["flight"]["arrival"] is True
+    assert [(row["key"], row["seat"]) for row in body["passengers"]] == [
+        ("P-0928-2", "3A"), ("P-0928-4", "5A"), ("P-0928-1", "2A"), ("P-0928-3", "4A")]
+    assert body["seats"] == list(airport_app.SEATS)
     assert client.get("/api/flight/RA999-20260928").status_code == 404
     assert client.get("/api/passenger/P-missing").status_code == 404
+
+
+def test_departure_shows_passengers_connecting_onto_it(fake):
+    _set_flights(fake, _flight(680, "2026-09-28 12:30:00.000000", 0, 0, destination="PHX"))
+    fake.tables["passenger_state"] = PASSENGERS
+    body = TestClient(airport_app.app).get("/api/flight/RA680-20260928").json()
+    assert body["flight"]["arrival"] is False
+    assert [(row["key"], row["seat"]) for row in body["passengers"]] == [
+        ("P-0928-2", "3F"), ("P-0928-5", "6F"), ("P-0928-1", "2F")]

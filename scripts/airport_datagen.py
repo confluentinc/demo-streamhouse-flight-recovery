@@ -1,11 +1,15 @@
 """River Air flight recovery data: 30 days of history plus one live day at the SFO hub.
 
-Each service day has 180 flights: 90 arrivals into SFO and 90 departures from it.
+Each service day has 180 flights: 90 arrivals into SFO and 90 departures from it. Every
+flight uses one 182-seat layout, modeled after a two-class Boeing 737-900ER, and each
+passenger has a seat on each of their flights.
 The live day is shifted so flight RA417 from Chicago is scheduled 50 minutes after the
-stream starts. Its delay is announced in three growing steps, and 200 of its 260
-passengers miss their connection. Every active flight publishes its status once a
-minute. Announced delays only grow (a severe delay may shrink by at most three minutes
-near landing), so a flight never goes from hours late back to on time.
+stream starts. Its delay grows every 30 seconds from +5 to +25 minutes, and 150 of its 170
+passengers miss their connection. Every active flight publishes its status once a minute
+(RA417 every 30 seconds), en-route arrivals revise their estimate by a minute or two along
+the way, and both hotels publish their rooms every 15 seconds. Announced delays only grow
+(a severe delay may shrink by at most three minutes near landing), so a flight never goes
+from hours late back to on time.
 
 The generator writes two rebooking offers a few seconds after a connection becomes HIGH
 risk. Past bookings are completed the way customers would complete them; RA417's offers
@@ -30,6 +34,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from itertools import pairwise
 
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -56,14 +61,20 @@ DEPARTURE_MINUTES = (
     1330, 1335, 1340, 1345, 1350, 1356, 1362, 1368, 1374, 1380, 1386, 1392, 1398, 1404, 1410)
 LAST_BANK = 75
 
+# Every flight's seat map, modeled after a two-class Boeing 737-900ER: First in rows 1-5
+# (A C | D F) and Economy in rows 6-32 (A B C | D E F), 182 seats.
+SEATS = tuple(f"{row}{letter}" for row in range(1, 33) for letter in ("ACDF" if row <= 5 else "ABCDEF"))
+
 HERO_NUMBER = 417
 HERO_ORIGIN = "ORD"
 HERO_MINUTE = 21 * 60 + 40
 HERO_LEAD = timedelta(minutes=50)
-# (minutes relative to the scheduled arrival, announced delay in minutes)
-HERO_REVEALS = ((-45, 30), (-35, 75), (-25, 115))
-HERO_CONNECTING = 200
-HERO_LOCAL = 60
+# From +5 to +25 minutes into the stream, each 30-second RA417 update adds to its delay, up to 115.
+HERO_EVERY = timedelta(seconds=30)
+HERO_RAMP = (timedelta(minutes=5), timedelta(minutes=25))
+HERO_DELAY = 115
+HERO_CONNECTING = 150
+HERO_LOCAL = 20
 HERO_BUFFER = (50, 110)
 
 CONNECTION_MINUTES = 45  # Flink's HIGH threshold in sql/24-serving-passenger-state.sql
@@ -75,13 +86,19 @@ SEVERE_DELAY = (90, 240)
 MODERATE_SHARE = 0.25
 MODERATE_DELAY = (15, 60)
 DELAYED_AT = 15
+MAP_AT_RISK = 45  # the dashboard's flight map colors a flight this many minutes late as at risk
 ACTIVE_BEFORE = timedelta(minutes=180)
 BOARDING = timedelta(minutes=30)
+# Live-stream arrival-time revisions: chance per update, minutes off the announced delay, and when they stop.
+REVISION_CHANCE = 0.8
+REVISION_MINUTES = (-1, 0, 1, 2)
+SETTLE_BEFORE = timedelta(minutes=10)
 
 HOTEL_RATES = {"Harbor Hotel": Decimal("189.00"), "Park Hotel": Decimal("219.00")}
 HARBOR_ROOMS = 40
 PARK_ROOMS = 150
 SELLOUT = timedelta(minutes=40)
+HOTEL_EVERY = timedelta(seconds=15)  # both hotels publish their rooms this often during the stream
 OVERNIGHT = timedelta(hours=6)
 AGENT_LATENCY_SECONDS = (5, 40)
 BOOKING_SHARE = 0.85
@@ -102,6 +119,7 @@ class Flight:
     scheduled: datetime
     offset: int = 0  # seconds after each minute this flight publishes
     reveals: list[tuple[datetime, int]] = field(default_factory=list)  # (published at, delay minutes)
+    every: timedelta = timedelta(minutes=1)  # how often it publishes while active
 
     @property
     def arrival(self) -> bool:
@@ -130,21 +148,23 @@ class Flight:
                     estimated_time=self.estimated_at(at), status=self.status_at(at))
 
     def ticks(self, after: datetime, until: datetime):
-        """Once-a-minute update times in (after, until], from three hours out to completion."""
+        """Update times in (after, until], one per `every`, from three hours out to completion."""
         tick = self.scheduled - ACTIVE_BEFORE + timedelta(seconds=self.offset)
         last = self.estimated_at() + timedelta(seconds=self.offset)
         if tick <= after:
-            tick += timedelta(minutes=(after - tick) // timedelta(minutes=1) + 1)
+            tick += self.every * ((after - tick) // self.every + 1)
         while tick <= min(last, until):
             yield tick
-            tick += timedelta(minutes=1)
+            tick += self.every
 
 
 @dataclass
 class Passenger:
     key: str
     inbound: Flight
-    connecting: Flight | None
+    inbound_seat: str
+    connecting: Flight | None = None
+    connecting_seat: str | None = None
     impacted_at: datetime | None = None
 
 
@@ -197,6 +217,7 @@ class Plan:
     days: list[Day]  # oldest history first, live day last
     tomorrow: Day
     recoveries: list[Recovery]
+    seed: int = SEED
 
     @property
     def live(self) -> Day:
@@ -224,7 +245,11 @@ def _assign_delays(day: Day, rng: random.Random) -> None:
     severe = {f.key for f in rng.sample(pool, SEVERE_PER_DAY - (1 if hero else 0))}
     for flight in day.flights:
         if flight is hero:
-            _delays(flight, HERO_REVEALS)
+            start, (first, last) = flight.scheduled - HERO_LEAD, HERO_RAMP
+            steps = (last - first) // HERO_EVERY
+            flight.every = HERO_EVERY
+            flight.reveals = [(start + first + HERO_EVERY * k, round(HERO_DELAY * k / steps))
+                              for k in range(1, steps + 1)]
         elif flight.key in forced:
             continue
         elif flight.key in severe:
@@ -260,8 +285,9 @@ def _risk_flip(inbound: Flight, onward: Flight) -> tuple[bool, datetime | None]:
     return True, flip
 
 
-def _passengers(day: Day, rng: random.Random) -> list[Passenger]:
+def _passengers(day: Day, rng: random.Random, seat_rng: random.Random) -> list[Passenger]:
     passengers = []
+    open_seats = {d.key: seat_rng.sample(SEATS, len(SEATS)) for d in day.departures}
     for flight in day.arrivals:
         hero = day.live and flight is day.hero
         if hero:
@@ -273,16 +299,66 @@ def _passengers(day: Day, rng: random.Random) -> list[Passenger]:
             low, high = CONNECTION_BUFFER
         candidates = [d for d in day.departures if d.destination != flight.origin
                       and timedelta(minutes=low) <= d.scheduled - flight.scheduled <= timedelta(minutes=high)]
-        for seq, connects in enumerate(plan, start=1):
-            passenger = Passenger(f"P-{day.service_date:%m%d}-{flight.number:03d}-{seq:03d}", flight, None)
+        seats = seat_rng.sample(SEATS, len(plan))
+        for seq, (connects, seat) in enumerate(zip(plan, seats, strict=True), start=1):
+            passenger = Passenger(f"P-{day.service_date:%m%d}-{flight.number:03d}-{seq:03d}", flight, seat)
             if connects and candidates:
                 for onward in rng.sample(candidates, min(3, len(candidates))):
                     valid, flip = _risk_flip(flight, onward)
                     if valid:
                         passenger.connecting, passenger.impacted_at = onward, flip
+                        passenger.connecting_seat = open_seats[onward.key].pop()
                         break
             passengers.append(passenger)
     return passengers
+
+
+def _band(delay: int) -> tuple[bool, bool]:
+    """What a delay shows on the dashboard: DELAYED from 15 minutes, an at-risk map color from 45."""
+    return delay >= DELAYED_AT, delay >= MAP_AT_RISK
+
+
+def _keeps_risk(inbound: Flight, onward, at: datetime, until: datetime, base: int, delay: int) -> bool:
+    """Whether estimating `delay` rather than `base` over [at, until) leaves every connection's risk as is."""
+    limit = timedelta(minutes=CONNECTION_MINUTES)
+    for flight in onward:
+        for when in [at, *(w for w, _ in flight.reveals if at < w < until)]:
+            gap = flight.estimated_at(when) - inbound.scheduled
+            if (gap - timedelta(minutes=delay) < limit) != (gap - timedelta(minutes=base) < limit):
+                return False
+    return True
+
+
+def _revise_estimates(day: Day, rng: random.Random) -> None:
+    """Live-stream arrival-time revisions that never change a status, map color, or connection's risk."""
+    start = day.hero.scheduled - HERO_LEAD
+    end = start + timedelta(minutes=STREAM_MINUTES)
+    onward: dict[str, dict[str, Flight]] = {}
+    for passenger in day.passengers:
+        if passenger.connecting:
+            onward.setdefault(passenger.inbound.key, {})[passenger.connecting.key] = passenger.connecting
+    for flight in day.arrivals:
+        updates = list(flight.ticks(start, flight.estimated_at() - SETTLE_BEFORE))
+        if flight is day.hero or len(updates) < 2:
+            continue
+        settle = (updates[-1], flight.delay_at(updates[-1]))
+        announced = {w for w, _ in flight.reveals}
+        revisions: list[tuple[datetime, int]] = []
+        for at in updates[:-1]:
+            if at > end:
+                break
+            if at in announced or rng.random() >= REVISION_CHANCE:
+                continue
+            base = flight.delay_at(at)
+            delay = base + rng.choice(REVISION_MINUTES)
+            until = min([w for w in announced if w > at] + [settle[0]])
+            values = [d for _, d in sorted([*flight.reveals, *revisions, (at, delay), settle])]
+            if (_band(delay) == _band(base) and max(values) - values[-1] <= 3
+                    and all(later >= earlier - 3 for earlier, later in pairwise(values))
+                    and _keeps_risk(flight, onward.get(flight.key, {}).values(), at, until, base, delay)):
+                revisions.append((at, delay))
+        if revisions:
+            flight.reveals = sorted([*flight.reveals, *revisions, settle])
 
 
 def build_day(seed: int, service_date: date, midnight: datetime, live: bool = False,
@@ -304,7 +380,8 @@ def build_day(seed: int, service_date: date, midnight: datetime, live: bool = Fa
     day = Day(service_date, live, arrivals, departures, [])
     if not schedule_only:
         _assign_delays(day, rng)
-        day.passengers = _passengers(day, rng)
+        # Seats draw from their own stream, so they never shift delays, connections, or offers.
+        day.passengers = _passengers(day, rng, random.Random(f"{seed}:{service_date.isoformat()}:{variant}:seats"))
     return day
 
 
@@ -353,22 +430,39 @@ def build_plan(start: datetime, seed: int = SEED, history: bool = True) -> Plan:
     days = [build_day(seed, today - timedelta(days=back), midnight - timedelta(days=back))
             for back in range(HISTORY_DAYS if history else 0, 0, -1)]
     days.append(build_day(seed, today, midnight, live=True))
+    _revise_estimates(days[-1], random.Random(f"{seed}:{today.isoformat()}:live:revisions"))
     tomorrow = build_day(seed, today + timedelta(days=1), midnight + timedelta(days=1), schedule_only=True)
     recoveries = []
     for day, next_day in zip(days, [*days[1:], tomorrow], strict=True):
         recoveries += _recoveries(day, next_day, seed, start + SELLOUT if day.live else None)
-    return Plan(start, days, tomorrow, recoveries)
+    return Plan(start, days, tomorrow, recoveries, seed)
 
 
-def _harbor(rooms: int) -> dict:
-    return dict(available_rooms=rooms, nightly_rate=HOTEL_RATES["Harbor Hotel"])
+def _hotel(name: str, rooms: int) -> dict:
+    return dict(available_rooms=rooms, nightly_rate=HOTEL_RATES[name])
+
+
+def _hotel_rooms(plan: Plan, until: datetime):
+    """(time, hotel, rooms) every HOTEL_EVERY as guests book and cancel; Harbor sells out at SELLOUT."""
+    rng = random.Random(f"{plan.seed}:{plan.start.isoformat()}:hotels")
+    harbor, park = HARBOR_ROOMS, PARK_ROOMS
+    for step in range(1, (until - plan.start) // HOTEL_EVERY + 1):
+        left = SELLOUT // HOTEL_EVERY - step  # updates until Harbor sells out
+        if left > 0:
+            harbor = max(1, min(HARBOR_ROOMS, left, harbor + rng.choices((-1, 0, 1), (45, 35, 20))[0]))
+        else:
+            harbor = 0
+        park = max(1, park + rng.choices((-1, 0, 1), (25, 55, 20))[0])
+        at = plan.start + HOTEL_EVERY * step
+        yield at, "Harbor Hotel", harbor
+        yield at, "Park Hotel", park
 
 
 def initial_records(plan: Plan):
     """Every row as of the stream start: history final state, the live day so far, tomorrow's schedule."""
     at = plan.start
-    yield HOTELS, "Harbor Hotel", _harbor(HARBOR_ROOMS)
-    yield HOTELS, "Park Hotel", dict(available_rooms=PARK_ROOMS, nightly_rate=HOTEL_RATES["Park Hotel"])
+    yield HOTELS, "Harbor Hotel", _hotel("Harbor Hotel", HARBOR_ROOMS)
+    yield HOTELS, "Park Hotel", _hotel("Park Hotel", PARK_ROOMS)
     for day in [*plan.days, plan.tomorrow]:
         for flight in day.flights:
             yield FLIGHTS, flight.key, flight.row(at)
@@ -378,23 +472,21 @@ def initial_records(plan: Plan):
             if day.live or passenger.connecting:
                 yield ITINERARIES, passenger.key, dict(
                     inbound_flight_id=passenger.inbound.key,
-                    connecting_flight_id=passenger.connecting.key if passenger.connecting else None)
+                    inbound_seat=passenger.inbound_seat,
+                    connecting_flight_id=passenger.connecting.key if passenger.connecting else None,
+                    connecting_seat=passenger.connecting_seat)
     for recovery in plan.recoveries:
         for key, value in recovery.rows(at):
             yield OFFERS, key, value
 
 
 def stream_events(plan: Plan, minutes: int) -> list[tuple[datetime, str, str, dict]]:
-    """Timed live updates after the stream start: flights, the hotel sellout, and offers."""
+    """Timed live updates after the stream start: flights, hotel rooms, and offers."""
     start, end = plan.start, plan.start + timedelta(minutes=minutes)
     events = []
     for flight in plan.live.flights:
         events += [(tick, FLIGHTS, flight.key, flight.row(tick)) for tick in flight.ticks(start, end)]
-    for minute in range(1, int(SELLOUT / timedelta(minutes=1)) + 1):
-        at = start + timedelta(minutes=minute)
-        if at <= end:
-            events.append((at, HOTELS, "Harbor Hotel",
-                           _harbor(HARBOR_ROOMS - HARBOR_ROOMS * minute // int(SELLOUT.total_seconds() // 60))))
+    events += [(at, HOTELS, hotel, _hotel(hotel, rooms)) for at, hotel, rooms in _hotel_rooms(plan, end)]
     for recovery in plan.recoveries:
         if recovery.passenger.inbound not in plan.live.arrivals:
             continue

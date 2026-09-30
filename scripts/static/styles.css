@@ -455,6 +455,64 @@ tbody tr.top-delay {
 .legend-dot.plane-waiting { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .legend-dot.plane-done { background: #7c89a8; }
 
+/* --- Seat map (flight drill-down) ---------------------------------------- */
+/* A top-down cabin with the nose on the left. Each .seat-row is one row of the
+   plane: D-F above the aisle, A-C below. First rows seat two per side in the
+   height of three Economy seats, so every row lines up with the seat letters. */
+
+.seat-map { padding: 14px 16px 14px; border-bottom: 1px solid var(--line); }
+.seat-map.reveal { animation: reveal .3s ease-out; }
+.cabin {
+  --seat-h: 13px; --seat-gap: 3px;
+  display: flex; align-items: center; gap: 3px;
+  padding: 10px 14px 10px 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 64px 14px 14px 64px / 50% 14px 14px 50%;
+  background: linear-gradient(180deg, rgba(148, 163, 184, .06), rgba(148, 163, 184, .02));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 0 24px rgba(34, 211, 238, .05) inset;
+}
+.seat-row { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.seat-row.first { flex-grow: 1.45; }
+.seat-row.first + .seat-row:not(.first) { margin-left: 9px; }
+.seat-row.cabin-letters { flex: 0 0 12px; }
+.seat-side {
+  display: flex; flex-direction: column; gap: var(--seat-gap);
+  height: calc(3 * var(--seat-h) + 2 * var(--seat-gap));
+}
+.cabin-letters span {
+  height: var(--seat-h); font: 600 9px/var(--seat-h) var(--font-mono); color: var(--faint); text-align: center;
+}
+.row-num {
+  height: 17px; overflow: hidden; text-align: center;
+  font: 500 9px/17px var(--font-mono); color: var(--faint); font-variant-numeric: tabular-nums;
+}
+/* Passengers face the nose, so each seat's backrest (the inset edge) is on its right. */
+.seat {
+  flex: 1 1 0; min-height: 0; border-radius: 3px 4px 4px 3px;
+  background: rgba(148, 163, 184, .07); border: 1px solid rgba(148, 163, 184, .2);
+  box-shadow: inset -3px 0 0 rgba(148, 163, 184, .14);
+  transition: background-color .5s ease, border-color .5s ease, box-shadow .5s ease, transform .12s ease;
+}
+.seat.ok, .seat.miss { cursor: pointer; }
+.seat.ok { background: rgba(52, 211, 153, .3); border-color: rgba(52, 211, 153, .62); box-shadow: inset -3px 0 0 var(--ok); }
+.seat.miss {
+  background: rgba(251, 113, 133, .34); border-color: rgba(251, 113, 133, .78);
+  box-shadow: inset -3px 0 0 var(--miss), 0 0 8px rgba(251, 113, 133, .35);
+}
+.seat:hover { transform: scale(1.18); }
+.seat.selected { outline: 2px solid var(--brand); outline-offset: 1px; box-shadow: inset -3px 0 0 #fff, 0 0 12px rgba(34, 211, 238, .75); }
+@keyframes seat-flip {
+  0% { transform: scale(1.45); filter: brightness(1.6); }
+  100% { transform: scale(1); filter: none; }
+}
+.seat.flip { animation: seat-flip .9s ease-out; }
+
+.legend-item b { margin-left: 2px; font: 600 11.5px/1 var(--font-mono); color: var(--text); }
+.legend-dot.seat-open { background: rgba(148, 163, 184, .3); }
+
+/* The flight map's info box, fixed to the viewport so panel edges can't clip it. */
+.seat-tip { position: fixed; z-index: 30; min-width: 250px; }
+
 /* --- Scrollbars (the rail and long tables scroll) ------------------------ */
 
 * { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, .22) transparent; }

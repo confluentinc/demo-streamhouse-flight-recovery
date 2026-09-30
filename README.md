@@ -2,7 +2,7 @@
 
 ![River Air flight recovery architecture](./docs/architecture.png)
 
-River Air runs 180 flights a day through SFO. When flight RA417 from Chicago slips by nearly two hours, 200 of its passengers miss their connections. Flink recomputes every connection as flight updates arrive, maintains `passenger_state` and `flight_impact`, and each at-risk passenger gets two rebooking offers, with a hotel when the wait is overnight. Thirty days of history answer the closing questions in Athena: how many flights were delayed, how many passengers were impacted, what it cost, and how long recovery takes. The [data model](./docs/data-model.md) defines every feed and field.
+River Air runs 180 flights a day through SFO. When flight RA417 from Chicago slips by nearly two hours, 150 of its passengers miss their connections. Flink recomputes every connection as flight updates arrive, maintains `passenger_state` and `flight_impact`, and each at-risk passenger gets two rebooking offers, with a hotel when the wait is overnight. Thirty days of history answer the closing questions in Athena: how many flights were delayed, how many passengers were impacted, what it cost, and how long recovery takes. The [data model](./docs/data-model.md) defines every feed and field.
 
 - **an operations app** through [Lightning Tables](https://docs.confluent.io/cloud/current/lightning/overview.html)
 - **AI agents** through the [Real-Time Context Engine](https://docs.confluent.io/cloud/current/ai/real-time-context-engine/overview.html) (MCP)

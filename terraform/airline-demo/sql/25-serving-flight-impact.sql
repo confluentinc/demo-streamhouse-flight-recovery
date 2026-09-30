@@ -1,5 +1,6 @@
 -- One row per flight: its latest status, delay, and how many passengers it puts at HIGH risk.
--- Tableflow syncs this table to Iceberg for the historical questions.
+-- Tableflow syncs this table to Iceberg for the historical questions. passenger_state is read
+-- uncommitted so a new HIGH count doesn't wait for that table's once-a-minute Flink commit.
 CREATE OR ALTER MATERIALIZED TABLE flight_impact (
   `key` STRING NOT NULL,
   origin STRING,
@@ -28,6 +29,6 @@ AS SELECT
 FROM flight_status f
 LEFT JOIN (
   SELECT inbound_flight_id, CAST(COUNT(*) FILTER (WHERE risk = 'HIGH') AS INT) AS affected_passengers
-  FROM passenger_state
+  FROM passenger_state /*+ OPTIONS('kafka.consumer.isolation-level' = 'read-uncommitted') */
   GROUP BY inbound_flight_id
 ) impact ON f.`key` = impact.inbound_flight_id;

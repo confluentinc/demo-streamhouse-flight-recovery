@@ -55,8 +55,16 @@
       </section>
       <section class="panel"><div class="panel-head"><h2 id="flight-title">Flight passengers</h2><span class="src" id="flight-sub"></span></div>
         <div id="flight-empty" class="pax-empty">Select a flight.</div>
-        <div class="table-wrap scroll hidden" id="flight-table"><table><thead><tr><th>Passenger</th><th>Going to</th>
-          <th>Connection</th><th>Minutes</th><th>Risk</th></tr></thead>
+        <div class="seat-map hidden" id="seat-map">
+          <div class="cabin" id="cabin" role="group" aria-label="Seat map, front of the plane on the left"></div>
+          <div class="map-legend">
+            <span class="legend-item"><i class="legend-dot plane-miss"></i>At risk <b id="seats-miss">0</b></span>
+            <span class="legend-item"><i class="legend-dot plane-ok"></i>Not at risk <b id="seats-ok">0</b></span>
+            <span class="legend-item"><i class="legend-dot seat-open"></i>Open <b id="seats-open">0</b></span>
+          </div>
+        </div>
+        <div class="table-wrap scroll hidden" id="flight-table"><table><thead><tr><th>Passenger</th><th>Seat</th><th>Going to</th>
+          <th id="other-flight-head">Connection</th><th>Minutes</th><th>Risk</th></tr></thead>
         <tbody id="passengers"></tbody></table></div>
       </section>
       <section class="panel" id="delays-panel"><div class="panel-head"><h2>Biggest delays</h2></div>
@@ -72,6 +80,7 @@
     </div>
   </main>
   <footer class="foot"><span id="status-line">Loading…</span><button id="refresh" class="ghost">Refresh</button></footer>
+  <div id="seat-tip" class="map-infobox seat-tip hidden" role="tooltip"></div>
   <script src="/static/flightmap.js"></script>
   <script src="/static/app.js"></script>
 </body>

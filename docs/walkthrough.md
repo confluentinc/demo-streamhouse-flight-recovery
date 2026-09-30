@@ -6,10 +6,10 @@ Built on [Confluent Cloud for Apache Flink](https://docs.confluent.io/cloud/curr
 [Tableflow](https://docs.confluent.io/cloud/current/topics/tableflow/overview.html).
 
 River Air runs 180 flights a day through its SFO hub. Flight RA417 from Chicago slips by nearly two
-hours, and 200 of its passengers miss their connections. The demo has three scenes:
+hours, and 150 of its passengers miss their connections. The demo has three scenes:
 
-1. **Live flights and passengers.** The app reads `flight_impact` and `passenger_state` through
-   Lightning Tables: every flight today, its delay, and how many passengers it puts at risk.
+1. **Live flights and passengers.** The app reads `flight_status`, `flight_impact`, and `passenger_state`
+   through Lightning Tables: every flight today, its delay, how many passengers it puts at risk, and its seat map.
 2. **Connection risk and hotel-aware recovery.** Flink recomputes each connection as flight updates
    arrive. Each HIGH-risk passenger gets two rebooking offers; overnight ones include a hotel. When
    Harbor Hotel sells out, the app switches the chosen offer to an available hotel before booking.
@@ -26,13 +26,13 @@ and the [data model](./data-model.md) explains every field.
 90-minute live stream in the background (log: `tmp/datagen.log`), enables Lightning Tables and RTCE,
 and offers to start the app at http://127.0.0.1:8000.
 
-RA417 is scheduled 50 minutes after the stream starts. Its delay is announced at +5, +15, and +25
-minutes, and Harbor Hotel sells out at +40. To restart the scene, run `uv run airport-datagen`; it
+RA417 is scheduled 50 minutes after the stream starts. From +5 to +25 minutes its delay grows every
+30 seconds, and Harbor Hotel sells out at +40. To restart the scene, run `uv run airport-datagen`; it
 stops any stream already running, republishes the data, and streams for another 90 minutes. For a
 quicker rehearsal, add `--skip-history`. `--dry-run` prints the records without publishing, and
 `--reset` writes tombstones for every generated key.
 
-In the app, open RA417 and pick a passenger. **Hotel options** replaces **Biggest delays** and shows
+In the app, open RA417, hover its seat map, and pick a passenger (click a seat or a table row). **Hotel options** replaces **Biggest delays** and shows
 Harbor Hotel's rooms counting down. Select the Harbor Hotel offer and book it. After the sellout,
 the app shows the switch to Park Hotel before the booking succeeds.
 
