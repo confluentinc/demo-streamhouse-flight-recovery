@@ -106,30 +106,34 @@ def get_owner_email(project_root: Path) -> str:
     return email
 
 
-def get_resource_prefix(project_root: Path) -> str:
-    """Get TF_VAR_resource_prefix from credentials.env, or the deploy default."""
+def get_resource_scope(project_root: Path) -> str:
+    """The AWS name stem this deployment's resources share, as an IAM pattern.
+
+    A fixed TF_VAR_deployment_name (RIVER-AIR-PROD) gives exact lowercase names such as
+    river-air-prod-analytics. Otherwise names are TF_VAR_resource_prefix (or the deploy
+    default) plus a random suffix terraform picks at apply, so the suffix is a wildcard.
+    """
     creds_file = project_root / "credentials.env"
-    if creds_file.exists():
-        creds = dotenv_values(creds_file)
-        if creds.get("TF_VAR_resource_prefix"):
-            return creds["TF_VAR_resource_prefix"].strip("'\"")
-    return DEFAULT_PREFIX
+    creds = dotenv_values(creds_file) if creds_file.exists() else {}
+    fixed = (creds.get("TF_VAR_deployment_name") or "").strip("'\"")
+    if fixed:
+        return fixed.lower()
+    prefix = (creds.get("TF_VAR_resource_prefix") or "").strip("'\"") or DEFAULT_PREFIX
+    return f"{prefix}-*"
 
 
-def get_demo_policy(account_id: str, region: str, resource_prefix: str) -> dict:
+def get_demo_policy(account_id: str, region: str, resource_scope: str) -> dict:
     """IAM policy covering exactly what this demo's one AWS key is used for:
 
     1. Bedrock model invocation (terraform/core/main.tf bedrock_connection) —
        used directly by Confluent's managed connection, not scoped further.
     2. Provisioning the Tableflow-to-S3/Glue path (Demo 3, optional):
        an S3 bucket, a cross-account IAM role, and its S3 + Glue policies
-       (terraform/airline-demo/analytics.tf). The random suffix
-       terraform appends to resource names isn't known until apply, so these
-       are scoped by the `{resource_prefix}-*-...` naming convention instead
-       of exact names.
+       (terraform/airline-demo/analytics.tf), scoped by the names they share
+       (see get_resource_scope).
     """
-    bucket_pattern = f"{resource_prefix}-*-analytics"
-    role_pattern = f"{resource_prefix}-*-tableflow-glue"
+    bucket_pattern = f"{resource_scope}-analytics"
+    role_pattern = f"{resource_scope}-tableflow-glue"
     policy_pattern = f"{role_pattern}-*"  # -s3-access / -glue-access
 
     return {
@@ -275,13 +279,13 @@ def attach_demo_policy(
     logger: logging.Logger,
     account_id: str,
     region: str,
-    resource_prefix: str,
+    resource_scope: str,
     username: str = AWS_IAM_USERNAME,
 ) -> None:
     """Attach the inline demo policy (Bedrock invoke + Tableflow S3/Glue provisioning) to the IAM user."""
     logger.info(f"Attaching policy '{AWS_POLICY_NAME}'...")
 
-    policy_doc = get_demo_policy(account_id, region, resource_prefix)
+    policy_doc = get_demo_policy(account_id, region, resource_scope)
 
     iam_client.put_user_policy(
         UserName=username,
@@ -341,7 +345,7 @@ def save_aws_credentials_file(
     access_key_id: str,
     secret_access_key: str,
     region: str,
-    resource_prefix: str,
+    resource_scope: str,
     tags: dict[str, str],
     logger: logging.Logger,
     username: str = AWS_IAM_USERNAME,
@@ -391,7 +395,7 @@ AWS Secret Access Key: {secret_access_key}
 - **Do NOT commit these credentials to Git**
 - These keys are scoped to exactly this demo: Bedrock model invocation, plus
   creating/destroying the S3 bucket, IAM role, and Glue Data Catalog entries
-  named `{resource_prefix}-*` (the Tableflow-to-S3/Glue path)
+  named `{resource_scope}-...` (the Tableflow-to-S3/Glue path)
 - Keys should be revoked immediately after the workshop
 - Each participant will use the same shared credentials
 
@@ -423,13 +427,13 @@ The api-keys destroy command will:
 
 **IAM User:** `{username}`
 **Region:** `{region}`
-**Resource prefix scope:** `{resource_prefix}-*`
+**Resource name scope:** `{resource_scope}-...`
 **Policy:** `{AWS_POLICY_NAME}` (inline policy)
 **Permissions:**
 - `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` (unscoped)
 - `sts:GetCallerIdentity` (unscoped)
-- S3 create/read/write/delete on bucket `{resource_prefix}-*-analytics`
-- IAM create/read/delete on role `{resource_prefix}-*-tableflow-glue` and its policies
+- S3 create/read/write/delete on bucket `{resource_scope}-analytics`
+- IAM create/read/delete on role `{resource_scope}-tableflow-glue` and its policies
 - Glue Data Catalog CRUD on this account's catalog/databases/tables
 
 **Tags:**
@@ -761,7 +765,7 @@ def create_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int:
         # Get owner email and region
         owner_email = get_owner_email(project_root)
         region = get_aws_region(project_root)
-        resource_prefix = get_resource_prefix(project_root)
+        resource_scope = get_resource_scope(project_root)
 
         # Build tags
         tags = get_tags(project_root, owner_email)
@@ -789,7 +793,7 @@ def create_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int:
                 logger,
                 account_id=account_id,
                 region=region,
-                resource_prefix=resource_prefix,
+                resource_scope=resource_scope,
                 username=iam_username,
             )
 
@@ -853,7 +857,7 @@ def create_aws_command(args: argparse.Namespace, logger: logging.Logger) -> int:
             access_key_id,
             secret_access_key,
             region,
-            resource_prefix,
+            resource_scope,
             tags,
             logger,
             username=iam_username,

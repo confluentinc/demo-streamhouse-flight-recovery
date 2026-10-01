@@ -18,8 +18,9 @@ data "aws_caller_identity" "current" {
 }
 
 locals {
-  analytics_bucket_name = "${local.core.resource_prefix}-${local.core.random_id}-analytics"
-  tableflow_role_name   = "${local.core.resource_prefix}-${local.core.random_id}-tableflow-glue"
+  # S3 bucket names must be lowercase, so a fixed RIVER-AIR-PROD becomes river-air-prod-analytics.
+  analytics_bucket_name = lower("${local.name}-analytics")
+  tableflow_role_name   = lower("${local.name}-tableflow-glue")
   tableflow_role_arn = (
     local.analytics_enabled
     ? "arn:aws:iam::${data.aws_caller_identity.current[0].account_id}:role/${local.tableflow_role_name}"
@@ -40,7 +41,7 @@ resource "aws_s3_bucket" "analytics" {
 resource "confluent_provider_integration" "tableflow" {
   count = local.analytics_enabled ? 1 : 0
 
-  display_name = "${local.core.resource_prefix}-${local.core.random_id}-tableflow"
+  display_name = local.display_name["tableflow"]
   environment {
     id = local.core.confluent_environment_id
   }
@@ -186,7 +187,7 @@ resource "confluent_catalog_integration" "glue" {
   kafka_cluster {
     id = local.core.confluent_kafka_cluster_id
   }
-  display_name = "${local.core.resource_prefix}-${local.core.random_id}-glue"
+  display_name = local.display_name["glue"]
   aws_glue {
     provider_integration_id = confluent_provider_integration.tableflow[0].id
   }

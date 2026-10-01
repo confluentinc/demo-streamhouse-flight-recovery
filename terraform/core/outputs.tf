@@ -137,6 +137,16 @@ output "aws_tableflow_credentials_present" {
   sensitive = true
 }
 
+output "resource_name" {
+  value       = local.name
+  description = "Base name for every named resource: the fixed deployment_name in capitals, or resource_prefix plus the random suffix"
+}
+
+output "resource_name_fixed" {
+  value       = local.fixed_name
+  description = "True when deployment_name set the base name, so resource labels are written in capitals too"
+}
+
 output "random_id" {
   value       = random_id.resource_suffix.hex
   description = "Random ID suffix used for resource naming"

@@ -25,6 +25,13 @@ def test_statements_chain_by_name():
     assert "AI_RUN_AGENT(\n    'passenger_recovery_agent'" in _sql("31")
 
 
+def test_native_model_is_shown_but_the_agent_stays_on_bedrock():
+    native = _sql("32")
+    assert "CREATE MODEL IF NOT EXISTS passenger_recovery_mode1" in native
+    assert "'provider' = 'confluent'" in native
+    assert "passenger_recovery_mode1" not in _sql("30")
+
+
 def test_agent_handles_the_generators_hero_flight():
     hero = f"{airport_datagen.AIRLINE}{airport_datagen.HERO_NUMBER}-"
     assert f"inbound_flight_id = CONCAT('{hero}'" in _sql("27")

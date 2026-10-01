@@ -16,7 +16,9 @@ Always runs, in order:
 AWS-only by design (RTCE + Flink Native Inference are AWS-only), so there is no
 cloud or region choice. Resource names use TF_VAR_resource_prefix from
 credentials.env, or DEFAULT_PREFIX when unset (saved on first run so later
-runs keep the same names).
+runs keep the same names), plus a random suffix. For a recorded demo, set
+TF_VAR_deployment_name=RIVER-AIR-PROD instead to get fixed names such as
+RIVER-AIR-PROD-ENV and RIVER-AIR-PROD-CLUSTER.
 
 Usage:
   uv run deploy               # interactive; the only command a person needs
@@ -50,6 +52,7 @@ DEPLOY_TARGETS = ["core", "airline-demo"]
 # The recovery agent's statements in terraform/airline-demo, applied once RTCE is up.
 AGENT_TARGETS = (
     "confluent_flink_statement.agent_setup",
+    "confluent_flink_statement.passenger_state_changes",
     "confluent_flink_statement.impacted_passengers",
     "confluent_flink_statement.recovery_agent",
     "confluent_flink_statement.recovery_offers",
@@ -226,7 +229,10 @@ def main():
     # resource names stable if DEFAULT_PREFIX changes later.
     prefix = creds.get("TF_VAR_resource_prefix", "") or DEFAULT_PREFIX
     _save_env_safe(creds_file, "TF_VAR_resource_prefix", prefix)
-    print(f"Resource name prefix: {prefix} (set TF_VAR_resource_prefix in credentials.env to change)")
+    if creds.get("TF_VAR_deployment_name"):
+        print(f"Deployment name: {creds['TF_VAR_deployment_name'].upper()} (fixed, from TF_VAR_deployment_name)")
+    else:
+        print(f"Resource name prefix: {prefix} (set TF_VAR_resource_prefix in credentials.env to change)")
 
     # Optionally generate fresh Confluent Cloud API keys.
     if input("\nGenerate new Confluent Cloud API keys? (y/n): ").strip().lower() == "y":
@@ -378,10 +384,11 @@ def _start_agent(root) -> None:
               "Run `uv run airport-datagen --offers generator` to have the generator write them.")
 
 
-def _run_datagen(root, agent: bool) -> None:
+def _run_datagen(root, agent: bool, history: bool = True):
     """Publish history and today's flights, then stream live updates in the background.
 
     When the recovery agent will run, it writes RA417's live offers and the generator skips them.
+    Returns the stream start.
     """
     from confluent_kafka.schema_registry import SchemaRegistryClient
 
@@ -406,7 +413,7 @@ def _run_datagen(root, agent: bool) -> None:
             time.sleep(2)
     start = _clock(None)
     offers = "agent" if agent else "generator"
-    run(start, minutes=0, agent_offers=agent)
+    run(start, history=history, minutes=0, agent_offers=agent)
     log = root / "tmp" / "datagen.log"
     log.parent.mkdir(exist_ok=True)
     with open(log, "a", encoding="utf-8") as out:
@@ -415,6 +422,7 @@ def _run_datagen(root, agent: bool) -> None:
             cwd=root, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     print(f"✓ Streaming live flight updates for {STREAM_MINUTES} minutes in the background "
           f"(log: {log.relative_to(root)}; restart with `uv run airport-datagen`)")
+    return start
 
 
 def _print_env_name(root) -> None:

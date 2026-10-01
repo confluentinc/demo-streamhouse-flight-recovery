@@ -17,6 +17,17 @@ variable "resource_prefix" {
   }
 }
 
+variable "deployment_name" {
+  description = "Fixed base name for every named resource, for a recorded demo: RIVER-AIR-PROD gives RIVER-AIR-PROD-ENV, RIVER-AIR-PROD-CLUSTER, and so on. Leave empty (the default) to use resource_prefix plus a random suffix, so workshop deployments can coexist."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = can(regex("^([A-Za-z0-9-]{1,32})?$", var.deployment_name))
+    error_message = "deployment_name must be letters, digits, or hyphens, up to 32 chars."
+  }
+}
+
 variable "cloud_region" {
   description = "AWS region for deployment. Must be an RTCE-supported region (default us-east-1)."
   type        = string

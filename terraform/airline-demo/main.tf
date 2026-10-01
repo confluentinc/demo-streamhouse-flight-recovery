@@ -41,6 +41,14 @@ locals {
   database      = local.core.confluent_kafka_cluster_display_name
   rest_endpoint = data.confluent_flink_region.airport.rest_endpoint
 
+  # Core's base name (RIVER-AIR-PROD, or prefix plus random suffix). try() keeps a core
+  # state from before deployment_name existed working.
+  name = try(local.core.resource_name, "${local.core.resource_prefix}-${local.core.random_id}")
+  display_name = {
+    for label in ["tableflow-api-key", "tableflow", "glue"] :
+    label => try(local.core.resource_name_fixed, false) ? upper("${local.name}-${label}") : "${local.name}-${label}"
+  }
+
   sql_props = {
     "sql.current-catalog"  = local.catalog
     "sql.current-database" = local.database
@@ -60,9 +68,9 @@ locals {
   agent_enabled = var.enable_recovery_agent && local.core.bedrock_enabled
 
   agent_setup = {
-    passenger_state_changes = "sql/26-staging-passenger-state-changes.sql"
-    model                   = "sql/28-model-passenger-recovery.sql"
-    tool                    = "sql/29-tool-live-context.sql"
+    model        = "sql/28-model-passenger-recovery.sql"
+    native_model = "sql/32-model-passenger-recovery-native.sql"
+    tool         = "sql/29-tool-live-context.sql"
   }
 }
 
@@ -138,9 +146,10 @@ resource "confluent_flink_statement" "flight_impact" {
 }
 
 # --- Recovery agent (gated on Bedrock + the RTCE connection) ----------------
-# The append-only change table, the model, and the RTCE tool have no
-# interdependencies. impacted_passengers reads the change table. The agent needs
-# the model and tool; the INSERT needs the agent, impacted_passengers, and
+# The models and the RTCE tool have no interdependencies. The staging tables
+# (passenger_state_changes, then impacted_passengers) are separate so
+# `uv run reset-demo-2` can rebuild them without touching the models. The agent
+# needs the model and tool; the INSERT needs the agent, impacted_passengers, and
 # passenger_recommendations.
 resource "confluent_flink_statement" "agent_setup" {
   for_each = local.agent_enabled ? local.agent_setup : {}
@@ -157,6 +166,31 @@ resource "confluent_flink_statement" "agent_setup" {
 
   statement_name = "airport-agent-${replace(each.key, "_", "-")}"
   statement      = file("${path.module}/${each.value}")
+  properties     = local.sql_props
+
+  depends_on = [confluent_flink_statement.passenger_state]
+}
+
+moved {
+  from = confluent_flink_statement.agent_setup["passenger_state_changes"]
+  to   = confluent_flink_statement.passenger_state_changes[0]
+}
+
+resource "confluent_flink_statement" "passenger_state_changes" {
+  count = local.agent_enabled ? 1 : 0
+
+  organization { id = data.confluent_organization.main.id }
+  environment { id = local.core.confluent_environment_id }
+  compute_pool { id = local.core.confluent_flink_compute_pool_id }
+  principal { id = local.core.app_manager_service_account_id }
+  rest_endpoint = local.rest_endpoint
+  credentials {
+    key    = local.core.app_manager_flink_api_key
+    secret = local.core.app_manager_flink_api_secret
+  }
+
+  statement_name = "airport-agent-passenger-state-changes"
+  statement      = file("${path.module}/sql/26-staging-passenger-state-changes.sql")
   properties     = local.sql_props
 
   depends_on = [confluent_flink_statement.passenger_state]
@@ -179,7 +213,7 @@ resource "confluent_flink_statement" "impacted_passengers" {
   statement      = file("${path.module}/sql/27-staging-impacted-passengers.sql")
   properties     = local.sql_props
 
-  depends_on = [confluent_flink_statement.agent_setup]
+  depends_on = [confluent_flink_statement.passenger_state_changes]
 }
 
 resource "confluent_flink_statement" "recovery_agent" {
@@ -233,7 +267,7 @@ resource "confluent_flink_statement" "recovery_offers" {
 resource "confluent_api_key" "tableflow" {
   count = local.analytics_enabled ? 1 : 0
 
-  display_name = "${local.core.resource_prefix}-${local.core.random_id}-tableflow-api-key"
+  display_name = local.display_name["tableflow-api-key"]
   description  = "Tableflow API key owned by the app-manager service account"
   owner {
     id          = local.core.app_manager_service_account_id

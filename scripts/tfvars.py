@@ -59,6 +59,7 @@ def generate_core_tfvars_content(
     api_key: str,
     api_secret: str,
     resource_prefix: str | None = None,
+    deployment_name: str | None = None,
     aws_bedrock_access_key: str | None = None,
     aws_bedrock_secret_key: str | None = None,
     aws_session_token: str | None = None,
@@ -78,6 +79,8 @@ def generate_core_tfvars_content(
         api_key: Confluent Cloud API key
         api_secret: Confluent Cloud API secret
         resource_prefix: Resource name prefix (defaults to the terraform default)
+        deployment_name: Fixed base name such as RIVER-AIR-PROD, used instead of the
+            prefix plus a random suffix (optional)
         aws_bedrock_access_key: AWS Bedrock access key (optional)
         aws_bedrock_secret_key: AWS Bedrock secret key (optional)
         aws_session_token: AWS session token for Bedrock (optional, for ASIA* temp creds)
@@ -95,6 +98,8 @@ confluent_cloud_api_secret = "{api_secret}"
 """
     if resource_prefix:
         content += f'resource_prefix = "{resource_prefix}"\n'
+    if deployment_name:
+        content += f'deployment_name = "{deployment_name}"\n'
 
     if aws_bedrock_access_key and aws_bedrock_secret_key:
         content += f'aws_bedrock_access_key = "{aws_bedrock_access_key}"\n'
@@ -138,6 +143,7 @@ def write_tfvars_for_deployment(
         api_key,
         api_secret,
         resource_prefix=resource_prefix or None,
+        deployment_name=get_credential_value(creds, "deployment_name"),
         aws_bedrock_access_key=get_credential_value(creds, "aws_bedrock_access_key"),
         aws_bedrock_secret_key=get_credential_value(creds, "aws_bedrock_secret_key"),
         aws_session_token=get_credential_value(creds, "aws_session_token"),

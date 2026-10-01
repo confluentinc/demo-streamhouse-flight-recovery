@@ -20,14 +20,23 @@ locals {
   region         = var.cloud_region
   prefix         = var.resource_prefix
   suffix         = random_id.resource_suffix.hex
-  name           = "${var.resource_prefix}-${random_id.resource_suffix.hex}"
+  fixed_name     = var.deployment_name != ""
+  name           = local.fixed_name ? upper(var.deployment_name) : "${var.resource_prefix}-${random_id.resource_suffix.hex}"
+
+  # A fixed deployment name is written in capitals, labels included: RIVER-AIR-PROD-ENV.
+  display_name = {
+    for label in [
+      "env", "cluster", "app-manager", "compute-pool", "app-manager-kafka-api-key",
+      "app-manager-sr-api-key", "app-manager-flink-api-key", "rtce-reader",
+    ] : label => local.fixed_name ? upper("${local.name}-${label}") : "${local.name}-${label}"
+  }
 
   # Bedrock inference-profile prefix follows the region family (us-*, eu-*, apac-*).
   model_prefix = length(regexall("^us-", var.cloud_region)) > 0 ? "us" : (length(regexall("^eu-", var.cloud_region)) > 0 ? "eu" : "apac")
 }
 
 resource "confluent_environment" "staging" {
-  display_name = "${local.name}-env"
+  display_name = local.display_name["env"]
 
   stream_governance {
     package = "ADVANCED"
@@ -45,7 +54,7 @@ data "confluent_schema_registry_cluster" "sr-cluster" {
 }
 
 resource "confluent_kafka_cluster" "standard" {
-  display_name = "${local.name}-cluster"
+  display_name = local.display_name["cluster"]
   availability = "SINGLE_ZONE"
   cloud        = local.cloud_provider
   region       = local.region
@@ -56,7 +65,7 @@ resource "confluent_kafka_cluster" "standard" {
 }
 
 resource "confluent_service_account" "app-manager" {
-  display_name = "${local.name}-app-manager"
+  display_name = local.display_name["app-manager"]
   description  = "Service account to manage the ${local.name} Kafka cluster and Flink statements"
 }
 
@@ -67,7 +76,7 @@ resource "confluent_role_binding" "app-manager-kafka-cluster-admin" {
 }
 
 resource "confluent_flink_compute_pool" "flinkpool-main" {
-  display_name = "${local.name}-compute-pool"
+  display_name = local.display_name["compute-pool"]
   cloud        = local.cloud_provider
   region       = local.region
   max_cfu      = 20
@@ -77,7 +86,7 @@ resource "confluent_flink_compute_pool" "flinkpool-main" {
 }
 
 resource "confluent_api_key" "app-manager-kafka-api-key" {
-  display_name = "${local.name}-app-manager-kafka-api-key"
+  display_name = local.display_name["app-manager-kafka-api-key"]
   description  = "Kafka API Key owned by the app-manager service account"
   owner {
     id          = confluent_service_account.app-manager.id
@@ -101,7 +110,7 @@ resource "confluent_api_key" "app-manager-kafka-api-key" {
 }
 
 resource "confluent_api_key" "app-manager-schema-registry-api-key" {
-  display_name = "${local.name}-app-manager-sr-api-key"
+  display_name = local.display_name["app-manager-sr-api-key"]
   description  = "Schema Registry API Key owned by the app-manager service account"
   owner {
     id          = confluent_service_account.app-manager.id
@@ -129,7 +138,7 @@ data "confluent_flink_region" "demo_flink_region" {
 }
 
 resource "confluent_api_key" "app-manager-flink-api-key" {
-  display_name = "${local.name}-app-manager-flink-api-key"
+  display_name = local.display_name["app-manager-flink-api-key"]
   description  = "Flink API Key owned by the app-manager service account"
   owner {
     id          = confluent_service_account.app-manager.id
@@ -158,7 +167,7 @@ data "confluent_organization" "main" {}
 # ---------------------------------------------------------------------------
 
 resource "confluent_service_account" "rtce-reader" {
-  display_name = "${local.name}-rtce-reader"
+  display_name = local.display_name["rtce-reader"]
   description  = "Service account for the RTCE MCP server (DeveloperRead on topics + Schema Registry subjects)"
 }
 
