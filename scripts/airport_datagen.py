@@ -18,6 +18,7 @@ RA417's offers and the generator writes every other flight's.
 
     uv run airport-datagen                  # history + live day, then stream 90 minutes
     uv run airport-datagen --offers generator  # write RA417's offers even if the agent runs
+    uv run airport-datagen --speed 5        # play the 90-minute stream in 18 minutes
     uv run airport-datagen --minutes 0      # publish the current state and exit
     uv run airport-datagen --dry-run --skip-history --minutes 5
     uv run airport-datagen --reset          # tombstone every generated key
@@ -94,10 +95,15 @@ REVISION_CHANCE = 0.8
 REVISION_MINUTES = (-1, 0, 1, 2)
 SETTLE_BEFORE = timedelta(minutes=10)
 
-HOTEL_RATES = {"Harbor Hotel": Decimal("189.00"), "Park Hotel": Decimal("219.00")}
-HARBOR_ROOMS = 40
-PARK_ROOMS = 150
-SELLOUT = timedelta(minutes=40)
+GRAND_HYATT = "Grand Hyatt at SFO"
+MARRIOTT = "SFO Airport Marriott Waterfront"
+HILTON = "Hilton SFO Airport Bayfront"
+HOTEL_ORDER = (GRAND_HYATT, MARRIOTT, HILTON)  # offered in this order; each offer takes the next hotel with rooms
+HOTEL_RATES = {GRAND_HYATT: Decimal("329.00"), MARRIOTT: Decimal("229.00"), HILTON: Decimal("249.00")}
+GRAND_HYATT_ROOMS = 40
+MARRIOTT_ROOMS = 150
+HILTON_ROOMS = 120
+SELLOUT = timedelta(minutes=40)  # the Grand Hyatt sells out this long after the stream starts
 HOTEL_EVERY = timedelta(seconds=15)  # both hotels publish their rooms this often during the stream
 OVERNIGHT = timedelta(hours=6)
 AGENT_LATENCY_SECONDS = (5, 40)
@@ -391,8 +397,10 @@ def _recoveries(day: Day, next_day: Day, seed: int, sellout_at: datetime | None)
     for flight in day.departures + next_day.departures:
         by_destination.setdefault(flight.destination, []).append(flight)
 
-    def harbor_open(at):
-        return sellout_at is None or at < sellout_at
+    def hotel_for(index: int, at: datetime) -> str:
+        """The index-th hotel in HOTEL_ORDER that still has rooms: the Grand Hyatt is gone from the sellout on."""
+        open_hotels = [h for h in HOTEL_ORDER if h != GRAND_HYATT or sellout_at is None or at < sellout_at]
+        return open_hotels[index]
 
     recoveries = []
     for passenger in day.passengers:
@@ -409,11 +417,11 @@ def _recoveries(day: Day, next_day: Day, seed: int, sellout_at: datetime | None)
             if flight.scheduled - landed < OVERNIGHT:
                 hotels.append(None)
             else:
-                hotels.append("Harbor Hotel" if index == 0 and harbor_open(recommended_at) else "Park Hotel")
+                hotels.append(hotel_for(index, recommended_at))
         books = rng.random() < BOOKING_SHARE
         decided_at = recommended_at + timedelta(seconds=rng.randint(*DECISION_SECONDS))
         choice = 0 if rng.random() < 0.7 or len(options) == 1 else 1
-        if books and hotels[choice] == "Harbor Hotel" and not harbor_open(decided_at) and len(options) > 1:
+        if books and hotels[choice] == GRAND_HYATT and sellout_at and decided_at >= sellout_at and len(options) > 1:
             choice = 1 - choice
         recoveries.append(Recovery(
             passenger, options, hotels, recommended_at,
@@ -443,26 +451,28 @@ def _hotel(name: str, rooms: int) -> dict:
 
 
 def _hotel_rooms(plan: Plan, until: datetime):
-    """(time, hotel, rooms) every HOTEL_EVERY as guests book and cancel; Harbor sells out at SELLOUT."""
+    """(time, hotel, rooms) every HOTEL_EVERY as guests book and cancel; the Grand Hyatt sells out at SELLOUT."""
     rng = random.Random(f"{plan.seed}:{plan.start.isoformat()}:hotels")
-    harbor, park = HARBOR_ROOMS, PARK_ROOMS
+    hyatt, marriott, hilton = GRAND_HYATT_ROOMS, MARRIOTT_ROOMS, HILTON_ROOMS
     for step in range(1, (until - plan.start) // HOTEL_EVERY + 1):
-        left = SELLOUT // HOTEL_EVERY - step  # updates until Harbor sells out
+        left = SELLOUT // HOTEL_EVERY - step  # updates until the Grand Hyatt sells out
         if left > 0:
-            harbor = max(1, min(HARBOR_ROOMS, left, harbor + rng.choices((-1, 0, 1), (45, 35, 20))[0]))
+            hyatt = max(1, min(GRAND_HYATT_ROOMS, left, hyatt + rng.choices((-1, 0, 1), (45, 35, 20))[0]))
         else:
-            harbor = 0
-        park = max(1, park + rng.choices((-1, 0, 1), (25, 55, 20))[0])
+            hyatt = 0
+        marriott = max(1, marriott + rng.choices((-1, 0, 1), (25, 55, 20))[0])
+        hilton = max(1, hilton + rng.choices((-1, 0, 1), (25, 55, 20))[0])
         at = plan.start + HOTEL_EVERY * step
-        yield at, "Harbor Hotel", harbor
-        yield at, "Park Hotel", park
+        yield at, GRAND_HYATT, hyatt
+        yield at, MARRIOTT, marriott
+        yield at, HILTON, hilton
 
 
 def initial_records(plan: Plan):
     """Every row as of the stream start: history final state, the live day so far, tomorrow's schedule."""
     at = plan.start
-    yield HOTELS, "Harbor Hotel", _hotel("Harbor Hotel", HARBOR_ROOMS)
-    yield HOTELS, "Park Hotel", _hotel("Park Hotel", PARK_ROOMS)
+    for name, rooms in ((GRAND_HYATT, GRAND_HYATT_ROOMS), (MARRIOTT, MARRIOTT_ROOMS), (HILTON, HILTON_ROOMS)):
+        yield HOTELS, name, _hotel(name, rooms)
     for day in [*plan.days, plan.tomorrow]:
         for flight in day.flights:
             yield FLIGHTS, flight.key, flight.row(at)
@@ -604,8 +614,14 @@ def agent_enabled() -> bool:
         return False
 
 
+def _due(start: datetime, at: datetime, speed: float) -> datetime:
+    """When to publish an event stamped `at`: stream time passes `speed` times faster than the clock."""
+    return start + (at - start) / speed
+
+
 def run(start: datetime, seed: int = SEED, history: bool = True, minutes: int = STREAM_MINUTES,
-        dry_run: bool = False, stream_only: bool = False, agent_offers: bool = False) -> None:
+        dry_run: bool = False, stream_only: bool = False, agent_offers: bool = False,
+        speed: float = 1.0) -> None:
     plan = build_plan(start, seed, history=history and not stream_only)
     if agent_offers:
         plan.recoveries = [r for r in plan.recoveries if r.passenger.inbound is not plan.live.hero]
@@ -629,13 +645,13 @@ def run(start: datetime, seed: int = SEED, history: bool = True, minutes: int = 
         pid_file.parent.mkdir(exist_ok=True)
         pid_file.write_text(str(os.getpid()))
     hero = plan.live.hero
-    logging.info("Streaming %d updates for %d minutes; %s is scheduled at %s UTC",
-                 len(events), minutes, hero.key, f"{hero.scheduled:%H:%M}")
+    logging.info("Streaming %d updates for %d minutes (%.4g minutes of waiting at %gx); %s is scheduled at %s UTC",
+                 len(events), minutes, minutes / speed, speed, hero.key, f"{hero.scheduled:%H:%M}")
     try:
         minute, sent = None, 0
         for at, topic, key, value in events:
             if not dry_run:
-                wait = (at - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+                wait = (_due(plan.start, at, speed) - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
                 if wait > 0:
                     time.sleep(wait)
             publisher.publish(topic, key, value)
@@ -668,6 +684,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--now", help="ISO-8601 UTC stream start (default: now)")
     parser.add_argument("--minutes", type=int, default=STREAM_MINUTES,
                         help=f"minutes of live updates to stream (default: {STREAM_MINUTES}; 0 exits after publishing)")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="play the stream this many times faster, e.g. 5 runs 90 minutes in 18 (default: 1). "
+                             "Event timestamps keep stream time, so the dashboard's clock runs ahead of the wall clock")
     parser.add_argument("--skip-history", action="store_true", help=f"skip the {HISTORY_DAYS} days of history")
     parser.add_argument("--stream-only", action="store_true",
                         help="stream the live updates for an earlier --now without republishing")
@@ -676,6 +695,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--offers", choices=("auto", "agent", "generator"), default="auto",
                         help="who writes RA417's offers (default auto: the agent when Terraform runs it)")
     args = parser.parse_args(argv)
+    if args.speed <= 0:
+        parser.error("--speed must be greater than 0")
     setup_logging()
     start = _clock(args.now)
     try:
@@ -684,7 +705,7 @@ def main(argv: list[str] | None = None) -> None:
         else:
             agent = args.offers == "agent" or (args.offers == "auto" and agent_enabled())
             run(start, args.seed, history=not args.skip_history, minutes=args.minutes,
-                dry_run=args.dry_run, stream_only=args.stream_only, agent_offers=agent)
+                dry_run=args.dry_run, stream_only=args.stream_only, agent_offers=agent, speed=args.speed)
     except KeyboardInterrupt:
         logging.info("Stopped")
 

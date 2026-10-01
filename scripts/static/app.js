@@ -352,8 +352,8 @@ async function renderPassenger() {
 }
 
 // Live hotel_inventory rows, cheapest first, each tagged with this passenger's
-// furthest-along offer there, so Harbor Hotel counting down to sold out (+40)
-// is visible before Select swaps in the next hotel with rooms left.
+// furthest-along offer there, so the Grand Hyatt counting down to sold out (+40)
+// is visible before Select replaces it with the next hotel that has rooms.
 function renderHotels(hotels, offers) {
   const rank = { OFFERED: 1, SELECTED: 2, BOOKED: 3 };
   const offerAt = {};
@@ -376,7 +376,9 @@ function renderHotels(hotels, offers) {
 async function act(verb, offerId) {
   try {
     const changed = await request(`/api/passenger/${encodeURIComponent(selected)}/${verb}/${encodeURIComponent(offerId)}`, "POST");
-    $("status-line").textContent = `${changed.status}: ${changed.hotel_name || "no hotel needed"}`;
+    $("status-line").textContent = changed.sold_out_hotel
+      ? `${changed.sold_out_hotel} is sold out. Now offering ${changed.hotel_name}.`
+      : `${changed.status}: ${changed.hotel_name || "no hotel needed"}`;
     setTimeout(() => { refresh(); renderPassenger(); }, 1000);
   } catch (error) {
     $("status-line").textContent = error.message;

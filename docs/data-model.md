@@ -70,9 +70,9 @@ No names, contact details, or preferences: the join and the risk rule don't need
 
 | Column | Type | Purpose |
 | --- | --- | --- |
-| `hotel_name` | STRING, key | `Harbor Hotel` or `Park Hotel`, both near SFO. |
+| `hotel_name` | STRING, key | `Grand Hyatt at SFO` (on the airport campus), `SFO Airport Marriott Waterfront`, or `Hilton SFO Airport Bayfront`. |
 | `available_rooms` | INT | Zero forces a different choice. |
-| `nightly_rate` | DECIMAL(10,2) | $189 and $219; the hotel cost of an overnight rebooking. |
+| `nightly_rate` | DECIMAL(10,2) | $329 (Grand Hyatt), $229 (Marriott), and $249 (Hilton); the hotel cost of an overnight rebooking. |
 
 ## Computed data products
 
@@ -158,6 +158,7 @@ erDiagram
 ```bash
 uv run airport-datagen                 # 30 days of history + today, then stream live updates for 90 minutes
 uv run airport-datagen --skip-history  # today only, for a quick rehearsal
+uv run airport-datagen --speed 5       # play the 90-minute stream in 18 (rehearsals; timestamps keep stream time)
 uv run airport-datagen --minutes 0     # publish the current state and exit
 uv run airport-datagen --dry-run --skip-history --minutes 5   # print JSON, no Kafka, no waiting
 uv run airport-datagen --reset         # tombstone every generated key
@@ -176,7 +177,7 @@ uv run airport-datagen --reset         # tombstone every generated key
 
 **Realistic updates.** An active flight publishes its current row once a minute, from three hours before departure or arrival until it has departed or landed. Announced delays only grow, in steps: a severe delay is revealed at about 30%, 65%, then 100% of its final length. Near landing, a severely delayed arrival may make up at most three minutes. Status only moves forward. The generator rejects any connection whose risk would change more than once, so a passenger never flips from HIGH back to OK. During the live stream, en-route arrivals also revise their estimate by a minute or two at most updates, the way arrival-time feeds do, and hold the announced delay again from 10 minutes before landing. A revision never changes a flight's status or map color, or any connection's risk.
 
-**The live day** is shifted so RA417 from Chicago O'Hare is scheduled 50 minutes after the stream starts (template time 21:40). RA417 carries 170 passengers, leaving 12 of its 182 seats open: 150 connect to last-bank departures with 50–110 minutes to spare, and 20 end their trip at SFO. RA417 publishes every 30 seconds, and from +5 to +25 minutes each update adds to its delay, up to 115 minutes. Its passengers turn HIGH one destination at a time, about once a minute from +6 to +16:30, until all 150 are at risk. Those passengers can only be rebooked onto tomorrow morning's flights, so each gets two overnight offers: the first with Harbor Hotel ($189) and the second with Park Hotel ($219). Both hotels publish their rooms every 15 seconds as guests book and cancel: Harbor Hotel drifts down about a room a minute and sells out exactly 40 minutes into the stream, and Park Hotel moves by a room here and there. RA417's offers stay `OFFERED` for the presenter; the app substitutes an available hotel when the chosen one has sold out.
+**The live day** is shifted so RA417 from Chicago O'Hare is scheduled 50 minutes after the stream starts (template time 21:40). RA417 carries 170 passengers, leaving 12 of its 182 seats open: 150 connect to last-bank departures with 50–110 minutes to spare, and 20 end their trip at SFO. RA417 publishes every 30 seconds, and from +5 to +25 minutes each update adds to its delay, up to 115 minutes. Its passengers turn HIGH one destination at a time, about once a minute from +6 to +16:30, until all 150 are at risk. Those passengers can only be rebooked onto tomorrow morning's flights, so each gets two overnight offers: the first with the Grand Hyatt at SFO ($329) and the second with the SFO Airport Marriott Waterfront ($229). All three hotels publish their rooms every 15 seconds as guests book and cancel: the Grand Hyatt drifts down about a room a minute and sells out exactly 40 minutes into the stream, and the Marriott and the Hilton ($249) move by a room here and there. After the sellout the agent offers the Marriott and the Hilton instead. RA417's offers stay `OFFERED` for the presenter; when the passenger selects a sold-out hotel, the app replaces it with the cheapest other hotel that has rooms, usually the Hilton, and the passenger chooses again.
 
 **Offers** follow the recovery agent's rules ([`sql/30`](../terraform/airline-demo/sql/30-agent-passenger-recovery.sql)). On the live day the agent writes RA417's when Bedrock is set up; the generator writes the rest, and all of them without Bedrock. Each HIGH-risk passenger gets two offers 5–40 seconds after the flight update that made the connection HIGH risk. The rebookings are the next two departures to the same destination at least 45 minutes after the passenger's arrival. Earlier today and in history, about 85% of passengers book one offer 3–90 minutes later; the rest let both offers close.
 
