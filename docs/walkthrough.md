@@ -12,7 +12,7 @@ hours, and 150 of its passengers miss their connections. The demo has three scen
    through Lightning Tables: every flight today, its delay, how many passengers it puts at risk, and its seat map.
 2. **Connection risk and hotel-aware recovery.** Flink recomputes each connection as flight updates
    arrive. Each HIGH-risk passenger gets two rebooking offers; overnight ones include a hotel. When
-   Harbor Hotel sells out, the app switches the chosen offer to an available hotel before booking.
+   the Grand Hyatt at SFO sells out, selecting it swaps in the Hilton, so the passenger chooses between the Marriott and the Hilton.
 3. **History in Iceberg.** Tableflow writes `flight_impact` and `passenger_recommendations` to
    Iceberg in S3 with an AWS Glue catalog, and Athena answers: how many flights were delayed in the
    last 30 days, how many passengers were impacted, what it cost, and how long recovery takes.
@@ -27,14 +27,15 @@ and the [data model](./data-model.md) explains every field.
 and offers to start the app at http://127.0.0.1:8000.
 
 RA417 is scheduled 50 minutes after the stream starts. From +5 to +25 minutes its delay grows every
-30 seconds, and Harbor Hotel sells out at +40. To restart the scene, run `uv run airport-datagen`; it
+30 seconds, and the Grand Hyatt at SFO sells out at +40. To restart the scene, run `uv run airport-datagen`; it
 stops any stream already running, republishes the data, and streams for another 90 minutes. For a
-quicker rehearsal, add `--skip-history`. `--dry-run` prints the records without publishing, and
+quicker rehearsal, add `--skip-history`, and `--speed 5` plays the stream five times faster (the 90 minutes take 18). `--dry-run` prints the records without publishing, and
 `--reset` writes tombstones for every generated key.
 
 In the app, open RA417, hover its seat map, and pick a passenger (click a seat or a table row). **Hotel options** replaces **Biggest delays** and shows
-Harbor Hotel's rooms counting down. Select the Harbor Hotel offer and book it. After the sellout,
-the app shows the switch to Park Hotel before the booking succeeds.
+the Grand Hyatt's rooms counting down. Select the Grand Hyatt offer after the sellout: it shows as
+sold out and the app replaces it with a Hilton offer, so the passenger now chooses between the Marriott and the Hilton.
+Select the Hilton and book it.
 
 For Demo 3, enable Tableflow on `passenger_recommendations` on screen (Tableflow on `flight_impact`
 is already enabled by Terraform), then run the Athena queries in the [data model](./data-model.md#work-backwards-from-the-questions).

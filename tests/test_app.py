@@ -119,37 +119,58 @@ def _offer(key, hotel_name, cost, status="OFFERED"):
             "impacted_at": "2026-09-28 10:00:00.000000", "recommended_at": "2026-09-28 10:01:00.000000"}
 
 
+GRAND_HYATT = "Grand Hyatt at SFO"
+MARRIOTT = "SFO Airport Marriott Waterfront"
+HILTON = "Hilton SFO Airport Bayfront"
 HOTELS = [
-    {"key": "Harbor Hotel", "available_rooms": "0", "nightly_rate": "189.00"},
-    {"key": "Park Hotel", "available_rooms": "4", "nightly_rate": "219.00"},
+    {"key": GRAND_HYATT, "available_rooms": "0", "nightly_rate": "329.00"},
+    {"key": MARRIOTT, "available_rooms": "4", "nightly_rate": "229.00"},
+    {"key": HILTON, "available_rooms": "30", "nightly_rate": "249.00"},
 ]
 
 
-def test_select_substitutes_available_hotel_then_book_closes_other(fake):
+def test_selecting_a_sold_out_hotel_offers_a_third_hotel_then_book_closes_other(fake):
     fake.tables["hotel_inventory"] = HOTELS
     fake.tables["passenger_recommendations"] = [
-        _offer("P-0928-417-001-O1", "Harbor Hotel", "189.00"),
-        _offer("P-0928-417-001-O2", "Park Hotel", "219.00"),
+        _offer("P-0928-417-001-O1", GRAND_HYATT, "329.00"),
+        _offer("P-0928-417-001-O2", MARRIOTT, "229.00"),
     ]
+    replaced = airport_app.select_offer("P-0928-417-001", "P-0928-417-001-O1")
+    assert replaced["sold_out_hotel"] == GRAND_HYATT
+    assert replaced["status"] == "OFFERED"  # not selected yet: the passenger chooses between Marriott and Hilton
+    assert (replaced["hotel_name"], replaced["hotel_cost"]) == (HILTON, "249.00")
+
+    fake.tables["passenger_recommendations"][0] = {k: v for k, v in replaced.items() if k != "sold_out_hotel"}
     chosen = airport_app.select_offer("P-0928-417-001", "P-0928-417-001-O1")
-    assert chosen["status"] == "SELECTED"
-    assert chosen["hotel_name"] == "Park Hotel"
-    assert chosen["hotel_cost"] == "219.00"
+    assert chosen["status"] == "SELECTED" and chosen["hotel_name"] == HILTON
+    assert "sold_out_hotel" not in chosen
 
     fake.tables["passenger_recommendations"][0] = chosen
     booked = airport_app.book_offer("P-0928-417-001", "P-0928-417-001-O1")
     assert booked["status"] == "BOOKED"
-    assert [(w["key"], w["status"]) for w in fake.writes] == [
-        ("P-0928-417-001-O1", "SELECTED"),
-        ("P-0928-417-001-O1", "BOOKED"),
-        ("P-0928-417-001-O2", "CLOSED"),
+    assert [(w["key"], w["status"], w["hotel_name"]) for w in fake.writes] == [
+        ("P-0928-417-001-O1", "OFFERED", HILTON),
+        ("P-0928-417-001-O1", "SELECTED", HILTON),
+        ("P-0928-417-001-O1", "BOOKED", HILTON),
+        ("P-0928-417-001-O2", "CLOSED", MARRIOTT),
     ]
+
+
+def test_sold_out_hotel_falls_back_to_the_other_offers_hotel_when_nothing_else_has_rooms(fake):
+    fake.tables["hotel_inventory"] = [{**row, "available_rooms": "0" if row["key"] != MARRIOTT else "4"}
+                                      for row in HOTELS]
+    fake.tables["passenger_recommendations"] = [
+        _offer("P-0928-417-001-O1", GRAND_HYATT, "329.00"),
+        _offer("P-0928-417-001-O2", MARRIOTT, "229.00"),
+    ]
+    replaced = airport_app.select_offer("P-0928-417-001", "P-0928-417-001-O1")
+    assert replaced["hotel_name"] == MARRIOTT
 
 
 def test_book_rejects_sold_out_hotel(fake):
     fake.tables["hotel_inventory"] = HOTELS
     fake.tables["passenger_recommendations"] = [
-        _offer("P-0928-417-001-O1", "Harbor Hotel", "189.00", status="SELECTED")]
+        _offer("P-0928-417-001-O1", GRAND_HYATT, "329.00", status="SELECTED")]
     with pytest.raises(airport_app.HTTPException) as error:
         airport_app.book_offer("P-0928-417-001", "P-0928-417-001-O1")
     assert error.value.status_code == 409
@@ -158,15 +179,16 @@ def test_book_rejects_sold_out_hotel(fake):
 def test_passenger_returns_offers_and_hotel_options_cheapest_first(fake):
     fake.tables["passenger_state"] = [{"key": "P-0928-417-001", "risk": "HIGH"}]
     fake.tables["passenger_recommendations"] = [
-        _offer("P-0928-417-001-O2", "Park Hotel", "219.00"),
-        _offer("P-0928-417-001-O1", "Harbor Hotel", "189.00"),
+        _offer("P-0928-417-001-O2", MARRIOTT, "229.00"),
+        _offer("P-0928-417-001-O1", GRAND_HYATT, "329.00"),
     ]
     fake.tables["hotel_inventory"] = list(reversed(HOTELS))
     body = TestClient(airport_app.app).get("/api/passenger/P-0928-417-001").json()
     assert [row["key"] for row in body["offers"]] == ["P-0928-417-001-O1", "P-0928-417-001-O2"]
     assert body["hotels"] == [
-        {"key": "Harbor Hotel", "available_rooms": 0, "nightly_rate": "189.00"},
-        {"key": "Park Hotel", "available_rooms": 4, "nightly_rate": "219.00"},
+        {"key": MARRIOTT, "available_rooms": 4, "nightly_rate": "229.00"},
+        {"key": HILTON, "available_rooms": 30, "nightly_rate": "249.00"},
+        {"key": GRAND_HYATT, "available_rooms": 0, "nightly_rate": "329.00"},
     ]
 
 
@@ -194,7 +216,7 @@ def test_write_offer_passes_nulls_and_parses_timestamps(monkeypatch):
     monkeypatch.setattr(airport_app, "_publisher", FakePublisher())
     offer = _offer("P-0928-417-001-O1", None, None)
     airport_app._write_offer(offer)
-    offer.update(hotel_name="Park Hotel", hotel_cost="219.00", recommended_at=1790000000000)
+    offer.update(hotel_name=HILTON, hotel_cost="249.00", recommended_at=1790000000000)
     airport_app._write_offer(offer)
     (topic, key, first), (_, _, second) = published
     assert (topic, key) == ("passenger_recommendations", "P-0928-417-001-O1")
@@ -203,7 +225,7 @@ def test_write_offer_passes_nulls_and_parses_timestamps(monkeypatch):
     assert first["recommended_at"] == datetime(2026, 9, 28, 10, 1)
     assert set(first) == {"passenger_id", "recommended_flight_id", "hotel_name", "status", "hotel_cost",
                           "impacted_at", "recommended_at"}
-    assert second["hotel_cost"] == Decimal("219.00")
+    assert second["hotel_cost"] == Decimal("249.00")
     assert second["recommended_at"] == datetime(2026, 9, 21, 14, 13, 20)
 
 

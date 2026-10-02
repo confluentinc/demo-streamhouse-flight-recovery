@@ -152,14 +152,16 @@ def test_offers_are_feasible_and_recovery_time_excludes_decisions(plan):
             assert set(row) == OFFER_FIELDS
             assert (row["hotel_cost"] is None) == (row["hotel_name"] is None)
             if row["status"] == "BOOKED" and passenger.inbound in plan.live.arrivals:
-                assert not (row["hotel_name"] == "Harbor Hotel" and recovery.resolved_at >= sellout)
+                assert not (row["hotel_name"] == g.GRAND_HYATT and recovery.resolved_at >= sellout)
 
 
 def test_hero_offers_stay_open_for_the_presenter(plan):
     hero = [r for r in plan.recoveries if r.passenger.inbound is plan.live.hero]
     assert len(hero) == 150
     assert all(not r.completes for r in hero)
-    assert all(r.hotels[0] == "Harbor Hotel" for r in hero)  # offered before the sellout
+    # Offered before the sellout: the Grand Hyatt and the Marriott, then the Marriott and the Hilton once it sells out.
+    assert all(r.hotels == [g.GRAND_HYATT, g.MARRIOTT] for r in hero if r.recommended_at < START + g.SELLOUT)
+    assert all(r.hotels == [g.MARRIOTT, g.HILTON] for r in hero if r.recommended_at >= START + g.SELLOUT)
 
 
 def test_initial_records_stay_within_lightning_row_cap(plan, records):
@@ -186,9 +188,10 @@ def test_stream_updates_flights_every_minute_ra417_every_30_seconds_and_hotels_e
     rooms = {hotel: [(at, value["available_rooms"]) for at, topic, key, value in events
                      if topic == g.HOTELS and key == hotel] for hotel in g.HOTEL_RATES}
     assert all(len(updates) == 4 * g.STREAM_MINUTES for updates in rooms.values())
-    assert all((count == 0) == (at >= START + g.SELLOUT) for at, count in rooms["Harbor Hotel"])
-    assert all(count >= 1 for _, count in rooms["Park Hotel"])
-    assert all(abs(a - b) <= 1 for (_, a), (_, b) in pairwise([(START, g.HARBOR_ROOMS), *rooms["Harbor Hotel"]]))
+    assert all((count == 0) == (at >= START + g.SELLOUT) for at, count in rooms[g.GRAND_HYATT])
+    assert all(count >= 1 for hotel in (g.MARRIOTT, g.HILTON) for _, count in rooms[hotel])
+    assert all(abs(a - b) <= 1
+               for (_, a), (_, b) in pairwise([(START, g.GRAND_HYATT_ROOMS), *rooms[g.GRAND_HYATT]]))
     offers = [value for _, topic, _, value in events if topic == g.OFFERS]
     assert sum(value["passenger_id"].startswith("P-0928-417-") for value in offers) == 300
 
@@ -223,3 +226,11 @@ def test_agent_writes_ra417_offers_instead_of_the_generator(capsys):
     assert any(key.startswith(hero) for key in _offer_keys(capsys))
     offers = _offer_keys(capsys, agent_offers=True)
     assert offers and not any(key.startswith(hero) for key in offers)
+
+
+def test_speed_compresses_waiting_but_not_stream_time():
+    start = datetime(2026, 10, 1, 12, 0)
+    at = start + timedelta(minutes=40)
+    assert g._due(start, at, 1.0) == at
+    assert g._due(start, at, 5.0) == start + timedelta(minutes=8)
+    assert g._due(start, start, 5.0) == start

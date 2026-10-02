@@ -184,7 +184,7 @@ def _hotels() -> dict[str, dict]:
 
 
 def _hotel_options() -> list[dict]:
-    """Every hotel's rooms left and rate, cheapest first (the order select_offer substitutes in)."""
+    """Every hotel's rooms left and rate, cheapest first (the order select_offer replaces a sold-out hotel in)."""
     return sorted(({**row, "available_rooms": _int(row.get("available_rooms"))} for row in _hotels().values()),
                   key=lambda row: Decimal(str(row["nightly_rate"])))
 
@@ -259,10 +259,18 @@ def select_offer(passenger_id: str, offer_id: str):
         if not hotel or _int(hotel.get("available_rooms")) < 1:
             available = sorted((row for row in hotels.values() if _int(row.get("available_rooms")) > 0),
                                key=lambda row: Decimal(str(row["nightly_rate"])))
-            if not available:
+            # The passenger's other offer keeps its hotel, so the replacement is a third hotel when one has rooms.
+            other = {row.get("hotel_name") for row in offers
+                     if row is not chosen and row.get("status") in {"OFFERED", "SELECTED"}}
+            options = [row for row in available if row["key"] not in other] or available
+            if not options:
                 raise HTTPException(status_code=409, detail="No hotel rooms available")
-            chosen["hotel_name"] = available[0]["key"]
-            chosen["hotel_cost"] = available[0]["nightly_rate"]
+            sold_out = chosen["hotel_name"]
+            chosen["hotel_name"] = options[0]["key"]
+            chosen["hotel_cost"] = options[0]["nightly_rate"]
+            chosen["status"] = "OFFERED"  # the passenger picks again from the new options
+            _write_offer(chosen)
+            return {**chosen, "sold_out_hotel": sold_out}
     chosen["status"] = "SELECTED"
     _write_offer(chosen)
     return chosen
