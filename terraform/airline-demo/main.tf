@@ -12,7 +12,7 @@
 #     -> passenger_state MATERIALIZED TABLE -> flight_impact MATERIALIZED TABLE
 #   recovery agent (gated, see local.agent_enabled):
 #     passenger_state -> passenger_state_changes -> impacted_passengers (append) ─┐
-#     model -> live_context tool -> agent ─────────────────────────────────────────┴-> INSERT INTO passenger_recommendations
+#     model -> hotel_inventory_live_context tool -> agent ─────────────────────────────────────────┴-> INSERT INTO passenger_recommendations
 #
 # The two derived serving tables (passenger_state, flight_impact) are
 # MATERIALIZED TABLES: one object owning both the table and its continuous query,
@@ -70,7 +70,7 @@ locals {
   agent_setup = {
     model        = "sql/28-model-passenger-recovery.sql"
     native_model = "sql/32-model-passenger-recovery-native.sql"
-    tool         = "sql/29-tool-live-context.sql"
+    tool         = "sql/29-tool-hotel-inventory-live-context.sql"
   }
 }
 

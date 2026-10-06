@@ -69,7 +69,7 @@ CORE = {"cloud_region": "us-east-1", "confluent_environment_id": "env-1",
 def test_drop_runs_in_the_demo_catalog_then_cleans_up(monkeypatch):
     cli = _CLI("COMPLETED")
     monkeypatch.setattr(demo_reset.subprocess, "run", cli)
-    demo_reset.Flink(CORE).run("DROP TOOL IF EXISTS live_context")
+    demo_reset.Flink(CORE).run("DROP TOOL IF EXISTS hotel_inventory_live_context")
     create, _, delete = cli.calls
     assert create[create.index("--property") + 1] == (
         "sql.current-catalog=RIVER-AIR-PROD-ENV,sql.current-database=RIVER-AIR-PROD-CLUSTER")

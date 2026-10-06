@@ -7,13 +7,14 @@ and the Bedrock model the agent runs on (passenger_recovery_model). The reset
   2. drops the Native Inference model, the RTCE tool, the agent, and the two staging tables,
   3. rebuilds the staging tables off screen (the agent's INSERT reads them),
   4. deletes RA417's offers for today, and
-  5. restarts the stream, so RA417's delay and the Harbor Hotel sellout play out again.
+  5. restarts the stream, so RA417's delay and the Grand Hyatt sellout play out again.
 
 Then CREATE MODEL, CREATE TOOL, CREATE AGENT, and the AI_RUN_AGENT INSERT run live on screen
 (see the SQL for each in docs/demo-script-screens.md). Running the reset again is safe.
 
 Usage:
   uv run reset-demo-2            # reset to the start of Demo 2
+  uv run reset-demo-2 --speed 4  # same, with the stream clock 4x faster
   uv run reset-demo-2 --restore  # skip the live run: start the agent the way deploy does
 """
 
@@ -23,7 +24,6 @@ import os
 import subprocess
 import sys
 import time
-from datetime import timedelta
 
 from dotenv import dotenv_values
 
@@ -35,14 +35,14 @@ from scripts.terraform_runner import run_terraform
 # Demo 2 creates these on screen. passenger_recovery_model stays: the agent runs on it.
 DROPS = (
     "DROP AGENT IF EXISTS passenger_recovery_agent",
-    "DROP TOOL IF EXISTS live_context",
+    "DROP TOOL IF EXISTS hotel_inventory_live_context",
     "DROP MODEL IF EXISTS passenger_recovery_mode1",
     "DROP MATERIALIZED TABLE IF EXISTS impacted_passengers",
     "DROP MATERIALIZED TABLE IF EXISTS passenger_state_changes",
 )
 # A statement whose SQL names one of these creates or runs a Demo 2 object, whether Terraform
 # or an earlier take on screen created it.
-DEMO_2_NAMES = ("AI_RUN_AGENT", "passenger_recovery_agent", "live_context", "passenger_recovery_mode1",
+DEMO_2_NAMES = ("AI_RUN_AGENT", "passenger_recovery_agent", "hotel_inventory_live_context", "passenger_recovery_mode1",
                 "passenger_state_changes", "impacted_passengers")
 # Terraform's copies of the statements the reset deletes; removed from state so a later apply recreates them.
 STATE_ADDRESSES = (
@@ -122,7 +122,7 @@ def _forget_in_terraform(demo, keep_staging: bool = False) -> None:
         subprocess.run(["terraform", "state", "rm", *addresses], cwd=demo, check=True, capture_output=True)
 
 
-def reset(root, flink: Flink) -> None:
+def reset(root, flink: Flink, speed: float = 1.0) -> None:
     demo = root / "terraform" / "airline-demo"
     print("Stopping the data stream...")
     airport_datagen.stop_previous_stream()
@@ -155,16 +155,9 @@ def reset(root, flink: Flink) -> None:
     print(f"Deleted {len(keys)} RA417 offer keys for today")
 
     print("Restarting the stream (today's flights only; history is unchanged)...")
-    clock = deploy._run_datagen(root, agent=True, history=False)
+    clock = deploy._run_datagen(root, agent=True, history=False, speed=speed)
 
-    def at(minutes: float) -> str:
-        return f"{clock + timedelta(minutes=minutes):%H:%M}"
-
-    print(f"""
-✓ Ready for Demo 2. The stream started at {at(0)} UTC:
-  {at(6)} to {at(16.5)}  RA417's passengers turn HIGH (record 2.1 here)
-  {at(40)}           Harbor Hotel sells out (record 2.4 from {at(38)})
-Run CREATE MODEL, CREATE TOOL, CREATE AGENT, then the AI_RUN_AGENT INSERT on screen.""")
+    deploy.print_video_2_clock(clock, speed)
 
 
 def restore(root, flink: Flink) -> None:
@@ -179,8 +172,12 @@ def restore(root, flink: Flink) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="uv run reset-demo-2", description=__doc__.split("\n")[0])
     parser.add_argument("--restore", action="store_true", help="start the agent the way deploy does instead")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="run the stream clock this many times faster (default 1; 4 is a 22-minute stream)")
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     args = parser.parse_args(argv)
+    if args.speed <= 0:
+        parser.error("--speed must be greater than 0")
 
     root = get_project_root()
     core_state = root / "terraform" / "core" / "terraform.tfstate"
@@ -200,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.yes and input("Continue? (y/n): ").strip().lower() != "y":
         sys.exit("Cancelled.")
     try:
-        reset(root, flink)
+        reset(root, flink, args.speed)
     except RuntimeError as error:
         sys.exit(f"✗ {error}")
 

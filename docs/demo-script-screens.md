@@ -23,7 +23,7 @@ This is the full demo script. Each row marked **▶ On screen** follows the scri
 
 Start the stream at least 40 minutes before scene 2.4.
 
-**Recording Demo 2 live:** run `uv run reset-demo-2` first. It removes what 2.3 creates (the Native Inference model, the `live_context` tool, the agent, and the `AI_RUN_AGENT` INSERT), so 2.3a–c run from a workspace instead of **Flink → Statements**, in the order of SQL 32, 29, 30, 31. Demo 1's tables, Lightning, RTCE, and the Bedrock model stay. The reset also restarts the stream and prints the clock above in UTC.
+**Recording Demo 2 live:** run `uv run reset-demo-2` first. It removes what 2.3 creates (the Native Inference model, the `hotel_inventory_live_context` tool, the agent, and the `AI_RUN_AGENT` INSERT), so 2.3a–c run from a workspace instead of **Flink → Statements**, in the order of SQL 32, 29, 30, 31. Demo 1's tables, Lightning, RTCE, and the Bedrock model stay. The reset also restarts the stream and prints the clock above in UTC.
 
 | Timing | ID | Visual | Narration |
 | :---: | :---: | ----- | ----- |
@@ -59,7 +59,7 @@ Start the stream at least 40 minutes before scene 2.4.
 | ▶ | 2.2d | **On screen:** enable RTCE in the Topics UI | ✅ **Topics → `hotel_inventory` → Real-Time Context Engine**. Deploy has already turned it on, and the agent needs it running, so show it as on (as in 1.2a). |
 | 1.5 min | 2.3 | CREATE MODEL CREATE AGENT (with RTCE) Query to run the agent (ZOOM into AI\_RUN\_AGENT) Show the results on the Flight in question | Next, we create the model that our agent will use. Here, we’re using a model hosted directly in Confluent. So there’s no need to move your data anywhere. Everything stays in Confluent and is fully managed for you. Next, we create the agent. We give it the model we just created, a simple set of instructions, and access to live hotel information through the **Real-Time Context Engine.** Now, our agent is ready,  but it’s not running yet. So we use `AI_RUN_AGENT` to turn it on. And just like that \- we now have an always-on agent that understands what’s happening in the business right now. As flight data changes, the agent continuously adjusts \-  evaluating the latest context, and recommending the best actions to help all the passengers who will miss their connecting flights, in light of the latest data. **Transition:** But identifying the best option is only half the story. Now we need to get that recommendation to the passenger. |
 | ▶ | 2.3a | **On screen:** CREATE MODEL, “a model hosted directly in Confluent” | 🧪 **Flink → Statements → `airport-agent-native-model`**. [Appendix B](#b-create-model-23a): `passenger_recovery_mode1`, Claude hosted in Confluent (Native Inference). Show this one. Native Inference can't call tools yet, so the agent runs on the Bedrock model `passenger_recovery_model` (statement `airport-agent-model`), which is named almost the same. Swap the agent over once tool calling works. |
-| ▶ | 2.3b | **On screen:** CREATE AGENT with RTCE | ✅ **Flink → Statements → `airport-agent-passenger-recovery`**. [Appendix C](#c-rtce-tool-and-create-agent-23b): the `live_context` tool on the RTCE MCP connection, then `CREATE AGENT passenger_recovery_agent … USING TOOLS live_context`. |
+| ▶ | 2.3b | **On screen:** CREATE AGENT with RTCE | ✅ **Flink → Statements → `airport-agent-passenger-recovery`**. [Appendix C](#c-rtce-tool-and-create-agent-23b): the `hotel_inventory_live_context` tool on the RTCE MCP connection, then `CREATE AGENT passenger_recovery_agent … USING TOOLS hotel_inventory_live_context`. |
 | ▶ | 2.3c | **On screen:** the query that runs the agent (zoom into `AI_RUN_AGENT`) | ✅ **Flink → Statements → `airport-agent-insert-passenger-recommendations`**. [Appendix D](#d-ai_run_agent-23c). Zoom in on:<br>`LATERAL TABLE(AI_RUN_AGENT('passenger_recovery_agent', CONCAT(…), g.group_key))`<br>It runs for RA417 only, once per final destination (11 runs of about 40 s each), the first time a passenger going there turns HIGH. Every passenger in that group gets its two offers. |
 | ▶ | 2.3d | **On screen:** the results for the flight in question | ✅ In a Flink workspace:<br>`SELECT * FROM passenger_recommendations WHERE passenger_id LIKE 'P-0928-417-%';`<br>That's 2 agent offers for each of the 150 passengers, for example `P-0928-417-081-O1`: RA605-20260929 · Grand Hyatt at SFO · $329 · OFFERED, and `-O2`: RA620-20260929 · SFO Airport Marriott Waterfront · $229. In the 2026-09-28 live run, when RA417 still had 200 connecting passengers, all 400 offers arrived within about 3 minutes of the statement starting. If the Grand Hyatt has already sold out when the agent runs, the offers are the Marriott and the Hilton instead. Other flights' offers come from the generator. Without Bedrock, deploy skips the agent and the generator also writes RA417's offers, 5–40 s after each passenger goes HIGH. |
 | 0.5 min | 2.4 | Design Team App Push notification showing agent recommendation User picks an option App shows agent chain of thought, Hotel that was recommended is now not available and suggests another hotel | That’s where our external agent comes in. It takes the recommendation and presents it directly to the passenger in the app. If the passenger accepts, the agent takes care of the booking. But notice what happens here, the original hotel is no longer available. The agent gets the latest information, finds the next best option, and books it instead. And that’s the power of the Streamhouse. With access to the latest context, the agent can adapt in real time, proactively find the next best option, and take action for the passenger. **Transition:** Back to the slides please |
@@ -159,10 +159,10 @@ WITH (
 
 ### C. RTCE tool and CREATE AGENT (2.3b)
 
-`uv run deploy` creates the MCP connection `rtce-connection` with the Confluent CLI. It points at the RTCE endpoint for the cluster, uses streamable HTTP, and signs in with the RTCE Global key from `credentials.env`. The key never appears in SQL or Terraform. The tool is statement `airport-agent-tool`, from [`sql/29-tool-live-context.sql`](../terraform/airline-demo/sql/29-tool-live-context.sql):
+`uv run deploy` creates the MCP connection `rtce-connection` with the Confluent CLI. It points at the RTCE endpoint for the cluster, uses streamable HTTP, and signs in with the RTCE Global key from `credentials.env`. The key never appears in SQL or Terraform. The tool is statement `airport-agent-tool`, from [`sql/29-tool-hotel-inventory-live-context.sql`](../terraform/airline-demo/sql/29-tool-hotel-inventory-live-context.sql):
 
 ```sql
-CREATE TOOL IF NOT EXISTS live_context
+CREATE TOOL IF NOT EXISTS hotel_inventory_live_context
 USING CONNECTION `rtce-connection`
 WITH (
   'type' = 'mcp',
@@ -192,7 +192,7 @@ The queries already use the right column names, so run them as given without cal
 
 Reply with exactly one line and nothing else:
 O1_FLIGHT=<flight key>;O1_HOTEL=<hotel name or NONE>;O1_COST=<nightly_rate or NONE>;O2_FLIGHT=<flight key or NONE>;O2_HOTEL=<hotel name or NONE>;O2_COST=<nightly_rate or NONE>'
-USING TOOLS live_context
+USING TOOLS hotel_inventory_live_context
 WITH (
   'max_iterations' = '15',
   'handle_exception' = 'continue'

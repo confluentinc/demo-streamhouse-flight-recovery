@@ -32,6 +32,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import timedelta
 
 from dotenv import dotenv_values, set_key
 
@@ -56,6 +57,13 @@ AGENT_TARGETS = (
     "confluent_flink_statement.impacted_passengers",
     "confluent_flink_statement.recovery_agent",
     "confluent_flink_statement.recovery_offers",
+)
+# --video-2 stops short of what Demo 2 creates on screen: only the Bedrock model the agent runs on
+# and the two staging tables its INSERT reads.
+VIDEO_2_TARGETS = (
+    'confluent_flink_statement.agent_setup["model"]',
+    "confluent_flink_statement.passenger_state_changes",
+    "confluent_flink_statement.impacted_passengers",
 )
 
 # Module-level buffer for Plan B fallback when set_key() fails (e.g. Windows locks).
@@ -126,11 +134,12 @@ def _flush_pending_writes(creds_file) -> None:
         sys.exit(1)
 
 
-def _deploy(root, targets) -> None:
+def _deploy(root, targets, video_2: bool = False) -> None:
     print("\n=== Starting Deployment ===")
     # A redeploy keeps the recovery agent when its RTCE connection already exists.
+    # --video-2 never does: Demo 2 creates the agent on screen.
     infra = setup_rtce.core_infra(root / "credentials.env")
-    if infra and setup_rtce.agent_connection_exists(infra):
+    if not video_2 and infra and setup_rtce.agent_connection_exists(infra):
         os.environ["TF_VAR_enable_recovery_agent"] = "true"
     for env in targets:
         env_path = root / "terraform" / env
@@ -155,9 +164,14 @@ def main():
         action="store_true",
         help="Bots: load credentials.env, skip prompts, no MCP registration",
     )
+    # Not advertised: for recording, deploys everything fresh up to where Demo 2's statements run live.
+    parser.add_argument("--video-2", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--speed", type=float, default=1.0, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.automated and args.testing:
         parser.error("--automated and --testing are mutually exclusive")
+    if args.speed <= 0:
+        parser.error("--speed must be greater than 0")
 
     print("=== Streamhouse Airline Demo — Deploy ===\n")
     root = get_project_root()
@@ -193,8 +207,8 @@ def main():
         for key, value in creds.items():
             if value:
                 os.environ[key] = value
-        _deploy(root, DEPLOY_TARGETS)
-        _finish(root, "claude" if args.automated else "none")
+        _deploy(root, DEPLOY_TARGETS, args.video_2)
+        _finish(root, "claude" if args.automated else "none", args.video_2, args.speed)
         return
 
     # ---- Interactive -----------------------------------------------------
@@ -335,8 +349,8 @@ def main():
     for key, value in final_creds.items():
         if value:
             os.environ[key] = value
-    _deploy(root, DEPLOY_TARGETS)
-    _finish(root, client)
+    _deploy(root, DEPLOY_TARGETS, args.video_2)
+    _finish(root, client, args.video_2, args.speed)
     if input("\nStart the app at http://127.0.0.1:8000 now? (Y/n): ").strip().lower() in ("", "y"):
         from scripts.airport_app import main as run_app
 
@@ -345,14 +359,26 @@ def main():
         print("Start it later with: uv run airport-app")
 
 
-def _finish(root, client: str) -> None:
-    """Publish the demo data, start the live stream, enable Lightning Tables/RTCE, then the agent."""
+def _finish(root, client: str, video_2: bool = False, speed: float = 1.0) -> None:
+    """Publish the demo data, start the live stream, enable Lightning Tables/RTCE, then the agent.
+
+    With video_2, the agent stays unstarted and the stream starts last, so Demo 2's clock begins
+    when everything is ready (as `uv run reset-demo-2` leaves it).
+    """
     agent = _bedrock_enabled(root)
+    if video_2 and not agent:
+        print("--video-2 needs the Bedrock connection (AWS credentials); deploying as usual.")
+    video_2 = video_2 and agent
     print("\n=== Publishing demo data ===")
-    _run_datagen(root, agent)
+    _run_datagen(root, agent, speed=speed, stream=not video_2)
     print("\n=== Enabling Lightning Tables and RTCE ===")
     setup_rtce.main(["--client", client])
-    if agent:
+    if video_2:
+        print("\n=== Preparing Demo 2 ===")
+        if _start_agent(root, VIDEO_2_TARGETS):
+            clock = _run_datagen(root, agent=True, history=False, speed=speed)
+            print_video_2_clock(clock, speed)
+    elif agent:
         print("\n=== Starting the recovery agent ===")
         _start_agent(root)
     else:
@@ -368,8 +394,19 @@ def _bedrock_enabled(root) -> bool:
         return False
 
 
-def _start_agent(root) -> None:
-    """Create the agent's RTCE connection, then apply only the agent's Flink statements."""
+def print_video_2_clock(clock, speed: float) -> None:
+    def at(minutes: float) -> str:
+        return f"{clock + timedelta(minutes=minutes / speed):%H:%M:%S}"
+
+    print(f"""
+✓ Ready for Demo 2. The stream started at {at(0)} UTC:
+  {at(6)} to {at(16.5)}  RA417's passengers turn HIGH (record 2.1 here)
+  {at(40)}           Grand Hyatt sells out (record 2.4 from {at(38)})
+Run CREATE MODEL, CREATE TOOL, CREATE AGENT, then the AI_RUN_AGENT INSERT on screen.""")
+
+
+def _start_agent(root, targets=AGENT_TARGETS) -> bool:
+    """Create the agent's RTCE connection, then apply only the given Flink statements."""
     creds_file = root / "credentials.env"
     creds = dotenv_values(str(creds_file))
     infra = setup_rtce.core_infra(creds_file)
@@ -378,13 +415,14 @@ def _start_agent(root) -> None:
     if infra and key and secret and setup_rtce.create_agent_connection(infra, key, secret):
         print(f"✓ Flink connection '{setup_rtce.AGENT_CONNECTION}' reaches RTCE")
         os.environ["TF_VAR_enable_recovery_agent"] = "true"
-        started = run_terraform(root / "terraform" / "airline-demo", targets=AGENT_TARGETS)
+        started = run_terraform(root / "terraform" / "airline-demo", targets=targets)
     if not started:
         print("⚠ The recovery agent did not start, so RA417 has no offers yet. "
               "Run `uv run airport-datagen --offers generator` to have the generator write them.")
+    return started
 
 
-def _run_datagen(root, agent: bool, history: bool = True):
+def _run_datagen(root, agent: bool, history: bool = True, speed: float = 1.0, stream: bool = True):
     """Publish history and today's flights, then stream live updates in the background.
 
     When the recovery agent will run, it writes RA417's live offers and the generator skips them.
@@ -414,13 +452,17 @@ def _run_datagen(root, agent: bool, history: bool = True):
     start = _clock(None)
     offers = "agent" if agent else "generator"
     run(start, history=history, minutes=0, agent_offers=agent)
+    if not stream:
+        return start
     log = root / "tmp" / "datagen.log"
     log.parent.mkdir(exist_ok=True)
     with open(log, "a", encoding="utf-8") as out:
         subprocess.Popen(
-            ["uv", "run", "airport-datagen", "--now", start.isoformat(), "--stream-only", "--offers", offers],
+            ["uv", "run", "airport-datagen", "--now", start.isoformat(), "--stream-only", "--offers", offers,
+             "--speed", str(speed)],
             cwd=root, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-    print(f"✓ Streaming live flight updates for {STREAM_MINUTES} minutes in the background "
+    print(f"✓ Streaming live flight updates for {STREAM_MINUTES} minutes"
+          f"{f' at {speed:g}x' if speed != 1 else ''} in the background "
           f"(log: {log.relative_to(root)}; restart with `uv run airport-datagen`)")
     return start
 

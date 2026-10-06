@@ -1,6 +1,7 @@
 """The recovery agent's SQL, Terraform, and deploy step agree on names and columns."""
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 from scripts import airport_datagen, deploy, setup_rtce
@@ -19,7 +20,7 @@ def test_statements_chain_by_name():
     agent = _sql("30")
     assert "CREATE AGENT IF NOT EXISTS passenger_recovery_agent" in agent
     assert "USING MODEL passenger_recovery_model" in agent
-    assert "USING TOOLS live_context" in agent
+    assert "USING TOOLS hotel_inventory_live_context" in agent
     assert "FROM passenger_state_changes" in _sql("27")
     assert "FROM impacted_passengers" in _sql("31")
     assert "AI_RUN_AGENT(\n    'passenger_recovery_agent'" in _sql("31")
@@ -92,3 +93,23 @@ def test_deploy_targets_exist_and_sql_files_exist():
         assert f'resource "{kind}" "{name}"' in main
     for path in re.findall(r'"(sql/[\w-]+\.sql)"', main):
         assert (DEMO / path).exists(), path
+
+
+def test_video_2_deploy_stops_before_what_demo_2_creates_on_screen(monkeypatch, tmp_path):
+    main = (DEMO / "main.tf").read_text()
+    for target in deploy.VIDEO_2_TARGETS:
+        assert target.split(".")[1].split("[")[0] in main
+
+    calls = []
+    monkeypatch.setattr(deploy, "_bedrock_enabled", lambda root: True)
+    monkeypatch.setattr(deploy.setup_rtce, "main", lambda argv: calls.append("rtce"))
+    monkeypatch.setattr(deploy, "_start_agent", lambda root, targets: calls.append(targets) or True)
+    monkeypatch.setattr(deploy, "_print_env_name", lambda root: None)
+
+    def datagen(root, agent, history=True, speed=1.0, stream=True):
+        calls.append(("datagen", history, speed, stream))
+        return datetime(2026, 10, 2, 17, 0)
+
+    monkeypatch.setattr(deploy, "_run_datagen", datagen)
+    deploy._finish(tmp_path, "none", video_2=True, speed=4)
+    assert calls == [("datagen", True, 4, False), "rtce", deploy.VIDEO_2_TARGETS, ("datagen", False, 4, True)]

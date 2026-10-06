@@ -22,7 +22,7 @@ The queries already use the right column names, so run them as given without cal
 
 Reply with exactly one line and nothing else:
 O1_FLIGHT=<flight key>;O1_HOTEL=<hotel name or NONE>;O1_COST=<nightly_rate or NONE>;O2_FLIGHT=<flight key or NONE>;O2_HOTEL=<hotel name or NONE>;O2_COST=<nightly_rate or NONE>'
-USING TOOLS live_context
+USING TOOLS hotel_inventory_live_context
 WITH (
   'max_iterations' = '15',
   'handle_exception' = 'continue'

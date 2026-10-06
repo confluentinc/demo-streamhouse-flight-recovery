@@ -49,9 +49,9 @@ generator publishes hotel updates directly to Kafka.
 
 To record Demo 2 with its statements run live, run `uv run reset-demo-2` first. It keeps Demo 1
 (the source tables, `passenger_state`, `flight_impact`, Lightning Tables, RTCE) and the Bedrock
-model, drops the Native Inference model, the `live_context` tool, the agent, and its INSERT,
+model, drops the Native Inference model, the `hotel_inventory_live_context` tool, the agent, and its INSERT,
 rebuilds the two staging tables off screen, deletes today's RA417 offers, and restarts the stream.
-It prints when RA417 flips and when Harbor Hotel sells out. Then run CREATE MODEL, CREATE TOOL,
+It prints when RA417 flips and when the Grand Hyatt sells out. Then run CREATE MODEL, CREATE TOOL,
 CREATE AGENT, and the INSERT on screen ([SQL 32, 29, 30, 31](../terraform/airline-demo/sql/)).
 Show the `passenger_state` join as `CREATE OR ALTER`; it already exists. To skip the live run,
 `uv run reset-demo-2 --restore` deletes any on-screen copy and starts the agent the way deploy does.

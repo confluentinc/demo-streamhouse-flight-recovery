@@ -53,3 +53,7 @@ recordings/**/*.mov
 internal/
 handoffs/
 terraform/core/DEPLOYED_RESOURCES.md
+
+# Local-only scratch and provider lock files
+passenger-flight-join-example.md
+.terraform.lock.hcl
