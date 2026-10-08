@@ -12,6 +12,7 @@ Always runs, in order:
      history and today's flights, then a 90-minute live stream in the background.
   4. Lightning Tables and RTCE on the demo topics, plus the RTCE MCP server for
      the coding agent chosen up front (same as `uv run setup-rtce`).
+  5. Topic tag colors through the Catalog API, after the recovery agent setup.
 
 AWS-only by design (RTCE + Flink Native Inference are AWS-only), so there is no
 cloud or region choice. Resource names use TF_VAR_resource_prefix from
@@ -45,6 +46,7 @@ from scripts.login_checks import _attempt_login_quiet, ensure_confluent_login
 from scripts.terraform import get_project_root, run_terraform_output
 from scripts.terraform_runner import run_terraform
 from scripts.tfvars import write_tfvars_for_deployment
+from scripts.topic_tags import apply_tag_colors
 from scripts.ui import prompt_with_default
 
 DEFAULT_REGION = "us-east-1"  # RTCE-supported; Bedrock Claude available here
@@ -383,6 +385,8 @@ def _finish(root, client: str, video_2: bool = False, speed: float = 1.0) -> Non
         _start_agent(root)
     else:
         print("\nRecovery agent: skipped (no Bedrock credentials); the generator writes all offers.")
+    print("\n=== Applying topic tag colors ===")
+    apply_tag_colors(root)
     _print_env_name(root)
 
 
