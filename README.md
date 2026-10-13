@@ -16,7 +16,16 @@ Prerequisites: `uv`, `terraform`, the Confluent CLI, and a Confluent Cloud accou
 uv run deploy
 ```
 
-That's it. Deploy asks for your Confluent Cloud login and API key, provisions everything, publishes 30 days of history and today's flights, starts a 90-minute live stream in the background, enables Lightning Tables and RTCE, and offers to start the app at http://127.0.0.1:8000. Later, `uv run airport-app` restarts the app and `uv run airport-datagen` restarts the scene.
+That's it. Deploy asks for your Confluent Cloud login and API key, provisions everything, publishes 30 days of history and today's flights, starts a 90-minute live stream in the background, enables Lightning Tables and RTCE, starts the Kafka Streams app, and offers to start the dashboards. Later, `uv run airport-app` restarts the app and `uv run airport-datagen` restarts the scene.
+
+## Flink and Kafka Streams: one app, two ways to run the stream processing
+
+The same dashboard runs twice on the same topics, with the same rules and the same answers:
+
+- **Powered by Flink** (http://127.0.0.1:8000): centralized stream processing. Fully managed Flink SQL computes connection risk once for the whole business, and Lightning Tables serves it to any app or agent. Results arrive at each Flink checkpoint, about once a minute.
+- **Powered by Kafka Streams** (http://127.0.0.1:8001): stream processing inside the app. The [Kafka Streams app](./kstreams/README.md) is a library in your own service, so you own its full lifecycle, and the dashboard queries the app's local state, so a change shows up in under a second. Running it is yours; the Kafka Streams UI in Confluent Cloud shows its topology and health to help.
+
+http://127.0.0.1:8000/compare shows both side by side. `uv run kstreams start` and `uv run kstreams stop` restart the Kafka Streams app (Java 17).
 
 Resource names get a random suffix so workshop deployments can share an org. For a recording, add `TF_VAR_deployment_name=RIVER-AIR-PROD` to `credentials.env` before deploying to get fixed names: `RIVER-AIR-PROD-ENV`, `RIVER-AIR-PROD-CLUSTER`, and so on.
 

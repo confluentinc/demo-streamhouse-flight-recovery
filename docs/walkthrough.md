@@ -61,13 +61,13 @@ Show the `passenger_state` join as `CREATE OR ALTER`; it already exists. To skip
 ### Local dependencies
 
 ```bash
-brew install uv git python && brew tap hashicorp/tap && brew install hashicorp/tap/terraform && brew install --cask confluent-cli
+brew install uv git python openjdk@17 && brew tap hashicorp/tap && brew install hashicorp/tap/terraform && brew install --cask confluent-cli
 ```
 
 **Windows:**
 
 ```powershell
-winget install astral-sh.uv Git.Git Hashicorp.Terraform ConfluentInc.Confluent-CLI Python.Python
+winget install astral-sh.uv Git.Git Hashicorp.Terraform ConfluentInc.Confluent-CLI Python.Python Microsoft.OpenJDK.17
 ```
 
 ### API keys & access

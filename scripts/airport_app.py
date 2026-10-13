@@ -7,6 +7,8 @@ back to the passenger_recommendations topic through Kafka, and show up on the ne
 Run:
     uv run airport-app                 # http://127.0.0.1:8000
     uv run airport-app --port 9000
+    uv run airport-app --engine kstreams --port 8001  # the same dashboard, powered by Kafka Streams
+    open http://127.0.0.1:8000/compare               # both side by side
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ PAGE_SIZE = rtce.LIGHTNING_MAX_ROWS
 WINDOW_BEFORE = timedelta(hours=18)
 WINDOW_AFTER = timedelta(hours=6)
 DELAYED_MINUTES = 15
+SOURCE = "Lightning Tables"  # where the UI says rows come from; --engine kstreams changes it
+POWERED_BY = "Flink"  # the engine that computes connection risk, shown as a badge in the header
 
 
 class Deployment:
@@ -118,6 +122,7 @@ class Deployment:
 deployment = Deployment()
 _pool = ThreadPoolExecutor(max_workers=8)  # runs a request's independent Lightning reads side by side
 _publisher: Publisher | None = None
+_new_publisher = lambda: Publisher(extract_kafka_credentials("aws", get_project_root()), dry_run=False)  # noqa: E731
 app = FastAPI(title="River Air flight recovery", docs_url=None, redoc_url=None)
 
 
@@ -155,7 +160,7 @@ def _timestamp(value) -> datetime | None:
 def _get_publisher() -> Publisher:
     global _publisher
     if _publisher is None:
-        _publisher = Publisher(extract_kafka_credentials("aws", get_project_root()), dry_run=False)
+        _publisher = _new_publisher()
     return _publisher
 
 
@@ -212,6 +217,8 @@ def state():
     delays = sorted(flights, key=lambda row: (-row["delay_minutes"], row.get("key") or ""))[:10]
     return {
         "now": now,
+        "source": SOURCE,
+        "powered_by": POWERED_BY,
         "flights": flights,
         "delays": delays,
         "counts": {
@@ -300,6 +307,12 @@ def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/compare")
+def compare():
+    """The Flink dashboard (:8000) and the Kafka Streams dashboard (:8001) side by side."""
+    return FileResponse(STATIC / "compare.html")
+
+
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -307,7 +320,23 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="uv run airport-app")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--engine", choices=("lightning", "kstreams"), default="lightning",
+                        help="where current state comes from: Lightning Tables (default) or the Kafka Streams app")
+    parser.add_argument("--cluster", choices=("deployed", "local", "env"), default=None,
+                        help="with --engine kstreams: where selections and bookings are written "
+                             "(default: the deployed demo when there is one, else the local broker)")
     args = parser.parse_args(argv)
+    if args.engine == "kstreams":
+        global deployment, _new_publisher, SOURCE, POWERED_BY
+        from scripts import kstreams_backend
+
+        deployment = kstreams_backend.KafkaStreamsDeployment()
+        cluster = args.cluster or kstreams_backend.default_cluster()
+        # On the deployed demo both dashboards write the way the generator does, so they partition alike;
+        # the 6-partition test clusters partition by key, like kstreams/datagen.py.
+        if cluster != "deployed":
+            _new_publisher = kstreams_backend.publisher_class(cluster)
+        SOURCE = POWERED_BY = "Kafka Streams"
     import uvicorn
 
     uvicorn.run(app, host=args.host, port=args.port)
