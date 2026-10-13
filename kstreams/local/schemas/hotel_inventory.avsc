@@ -1,0 +1,4 @@
+{"namespace": "org.apache.flink.avro.generated", "type": "record", "name": "record", "fields": [
+  {"name": "available_rooms", "type": ["null", "int"], "default": null},
+  {"name": "nightly_rate", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}], "default": null}
+]}

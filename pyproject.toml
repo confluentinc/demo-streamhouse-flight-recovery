@@ -43,6 +43,7 @@ api-keys = "scripts.workshop_key_manager:main"
 test-bedrock = "scripts.test_bedrock_credentials:main"
 airport-app = "scripts.airport_app:main"
 reset-demo-2 = "scripts.demo_reset:main"
+kstreams = "scripts.kstreams_backend:main"
 
 [project.urls]
 Repository = "https://github.com/confluentinc/demo-streamhouse-flight-recovery"

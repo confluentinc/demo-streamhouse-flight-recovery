@@ -16,6 +16,20 @@ def _deployment(tmp_path, monkeypatch):
         (tmp_path / "terraform" / env / "terraform.tfstate").write_text("{}")
     monkeypatch.setattr(destroy, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(sys, "argv", ["destroy", "--testing"])
+    # Never stop a real Kafka Streams app from a test.
+    monkeypatch.setattr(destroy.kstreams_backend, "stop", lambda **kwargs: None)
+
+
+def test_kstreams_stops_before_the_cluster_is_destroyed(tmp_path, monkeypatch):
+    _deployment(tmp_path, monkeypatch)
+    order = []
+    monkeypatch.setattr(destroy.kstreams_backend, "stop", lambda **kwargs: order.append(("stop", kwargs)))
+    monkeypatch.setattr(destroy, "run_terraform_destroy", lambda env_path: order.append(env_path.name) or True)
+
+    destroy.main()
+
+    assert order[0] == ("stop", {"clear_state": True})
+    assert order[1:] == ["airline-demo", "core"]
 
 
 def test_failed_demo_destroy_keeps_core(tmp_path, monkeypatch):

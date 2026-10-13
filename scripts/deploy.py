@@ -30,6 +30,7 @@ Usage:
 import argparse
 import getpass
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -353,12 +354,20 @@ def main():
             os.environ[key] = value
     _deploy(root, DEPLOY_TARGETS, args.video_2)
     _finish(root, client, args.video_2, args.speed)
-    if input("\nStart the app at http://127.0.0.1:8000 now? (Y/n): ").strip().lower() in ("", "y"):
+    if input("\nStart the dashboards now (Flink :8000, Kafka Streams :8001, side by side at /compare)? (Y/n): "
+             ).strip().lower() in ("", "y"):
         from scripts.airport_app import main as run_app
 
+        log = root / "tmp" / "airport-app-kstreams.log"
+        with open(log, "a", encoding="utf-8") as out:
+            subprocess.Popen(["uv", "run", "airport-app", "--engine", "kstreams", "--port", "8001"], cwd=root,
+                             stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        print("Powered by Flink:         http://127.0.0.1:8000\n"
+              "Powered by Kafka Streams: http://127.0.0.1:8001\n"
+              "Side by side:             http://127.0.0.1:8000/compare")
         run_app([])
     else:
-        print("Start it later with: uv run airport-app")
+        print("Start them later with: uv run airport-app  (and: uv run airport-app --engine kstreams --port 8001)")
 
 
 def _finish(root, client: str, video_2: bool = False, speed: float = 1.0) -> None:
@@ -387,7 +396,22 @@ def _finish(root, client: str, video_2: bool = False, speed: float = 1.0) -> Non
         print("\nRecovery agent: skipped (no Bedrock credentials); the generator writes all offers.")
     print("\n=== Applying topic tag colors ===")
     apply_tag_colors(root)
+    print("\n=== Starting Kafka Streams (the same app logic, run inside your own service) ===")
+    _start_kstreams()
     _print_env_name(root)
+
+
+def _start_kstreams() -> None:
+    """Run the Kafka Streams app on the same topics Flink reads, so the second dashboard can race the first."""
+    from scripts import kstreams_backend
+
+    if shutil.which("java") is None:
+        print("Kafka Streams: skipped (needs Java 17). Install it, then run `uv run kstreams start`.")
+        return
+    try:
+        kstreams_backend.start("deployed")
+    except Exception as e:  # never fail the Flink demo because of the Kafka Streams side
+        print(f"⚠ Kafka Streams did not start: {e}. Retry with `uv run kstreams start`.")
 
 
 def _bedrock_enabled(root) -> bool:

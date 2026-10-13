@@ -105,6 +105,7 @@ def test_video_2_deploy_stops_before_what_demo_2_creates_on_screen(monkeypatch, 
     monkeypatch.setattr(deploy.setup_rtce, "main", lambda argv: calls.append("rtce"))
     monkeypatch.setattr(deploy, "_start_agent", lambda root, targets: calls.append(targets) or True)
     monkeypatch.setattr(deploy, "_print_env_name", lambda root: None)
+    monkeypatch.setattr(deploy, "apply_tag_colors", lambda root: None)
 
     def datagen(root, agent, history=True, speed=1.0, stream=True):
         calls.append(("datagen", history, speed, stream))
