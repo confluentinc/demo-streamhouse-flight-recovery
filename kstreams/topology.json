@@ -1,0 +1,354 @@
+{
+  "subtopologies" : [ {
+    "id" : 0,
+    "nodes" : [ {
+      "name" : "count-at-risk",
+      "type" : "processor",
+      "stores" : [ "at-risk-by-flight" ],
+      "predecessors" : [ "count-at-risk-source" ],
+      "successors" : [ "join-at-risk-join-other" ]
+    }, {
+      "name" : "count-at-risk-source",
+      "type" : "source",
+      "topics" : [ "at-risk-repartition" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "count-at-risk" ]
+    }, {
+      "name" : "drop-unchanged-flight-status",
+      "type" : "processor",
+      "stores" : [ "flight-status-last-seen" ],
+      "predecessors" : [ "parse-flight-status" ],
+      "successors" : [ "flight-status-table" ]
+    }, {
+      "name" : "flight-impact",
+      "type" : "processor",
+      "stores" : [ "flight-impact" ],
+      "predecessors" : [ "join-at-risk" ],
+      "successors" : [ "flight-index-changes" ]
+    }, {
+      "name" : "flight-index",
+      "type" : "processor",
+      "stores" : [ "flight-index-keys", "flights-by-scheduled-time" ],
+      "predecessors" : [ "flight-index-changes" ],
+      "successors" : [ ]
+    }, {
+      "name" : "flight-index-changes",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "flight-impact" ],
+      "successors" : [ "flight-index" ]
+    }, {
+      "name" : "flight-status-table",
+      "type" : "processor",
+      "stores" : [ "flights" ],
+      "predecessors" : [ "drop-unchanged-flight-status" ],
+      "successors" : [ "join-at-risk-join-this", "join-connecting-flight-foreign-join-subscription", "join-inbound-flight-foreign-join-subscription" ]
+    }, {
+      "name" : "join-at-risk",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "join-at-risk-join-other", "join-at-risk-join-this" ],
+      "successors" : [ "flight-impact" ]
+    }, {
+      "name" : "join-at-risk-join-other",
+      "type" : "processor",
+      "stores" : [ "flights" ],
+      "predecessors" : [ "count-at-risk" ],
+      "successors" : [ "join-at-risk" ]
+    }, {
+      "name" : "join-at-risk-join-this",
+      "type" : "processor",
+      "stores" : [ "at-risk-by-flight" ],
+      "predecessors" : [ "flight-status-table" ],
+      "successors" : [ "join-at-risk" ]
+    }, {
+      "name" : "join-connecting-flight-foreign-join-subscription",
+      "type" : "processor",
+      "stores" : [ "join-connecting-flight-subscription-store" ],
+      "predecessors" : [ "flight-status-table" ],
+      "successors" : [ "join-connecting-flight-subscription-response-sink" ]
+    }, {
+      "name" : "join-connecting-flight-subscription-join-foreign",
+      "type" : "processor",
+      "stores" : [ "flights" ],
+      "predecessors" : [ "join-connecting-flight-subscription-receive" ],
+      "successors" : [ "join-connecting-flight-subscription-response-sink" ]
+    }, {
+      "name" : "join-connecting-flight-subscription-receive",
+      "type" : "processor",
+      "stores" : [ "join-connecting-flight-subscription-store" ],
+      "predecessors" : [ "join-connecting-flight-subscription-registration-source" ],
+      "successors" : [ "join-connecting-flight-subscription-join-foreign" ]
+    }, {
+      "name" : "join-connecting-flight-subscription-registration-source",
+      "type" : "source",
+      "topics" : [ "join-connecting-flight-subscription-registration-topic" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "join-connecting-flight-subscription-receive" ]
+    }, {
+      "name" : "join-connecting-flight-subscription-response-sink",
+      "type" : "sink",
+      "topic" : "join-connecting-flight-subscription-response-topic",
+      "topicNameExtractor" : null,
+      "predecessors" : [ "join-connecting-flight-foreign-join-subscription", "join-connecting-flight-subscription-join-foreign" ],
+      "successors" : [ ]
+    }, {
+      "name" : "join-inbound-flight-foreign-join-subscription",
+      "type" : "processor",
+      "stores" : [ "join-inbound-flight-subscription-store" ],
+      "predecessors" : [ "flight-status-table" ],
+      "successors" : [ "join-inbound-flight-subscription-response-sink" ]
+    }, {
+      "name" : "join-inbound-flight-subscription-join-foreign",
+      "type" : "processor",
+      "stores" : [ "flights" ],
+      "predecessors" : [ "join-inbound-flight-subscription-receive" ],
+      "successors" : [ "join-inbound-flight-subscription-response-sink" ]
+    }, {
+      "name" : "join-inbound-flight-subscription-receive",
+      "type" : "processor",
+      "stores" : [ "join-inbound-flight-subscription-store" ],
+      "predecessors" : [ "join-inbound-flight-subscription-registration-source" ],
+      "successors" : [ "join-inbound-flight-subscription-join-foreign" ]
+    }, {
+      "name" : "join-inbound-flight-subscription-registration-source",
+      "type" : "source",
+      "topics" : [ "join-inbound-flight-subscription-registration-topic" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "join-inbound-flight-subscription-receive" ]
+    }, {
+      "name" : "join-inbound-flight-subscription-response-sink",
+      "type" : "sink",
+      "topic" : "join-inbound-flight-subscription-response-topic",
+      "topicNameExtractor" : null,
+      "predecessors" : [ "join-inbound-flight-foreign-join-subscription", "join-inbound-flight-subscription-join-foreign" ],
+      "successors" : [ ]
+    }, {
+      "name" : "parse-flight-status",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "read-flight-status" ],
+      "successors" : [ "drop-unchanged-flight-status" ]
+    }, {
+      "name" : "read-flight-status",
+      "type" : "source",
+      "topics" : [ "flight_status" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "parse-flight-status" ]
+    } ]
+  }, {
+    "id" : 1,
+    "nodes" : [ {
+      "name" : "at-risk",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "passenger-risk-table" ],
+      "successors" : [ "count-at-risk-sink" ]
+    }, {
+      "name" : "count-at-risk-sink",
+      "type" : "sink",
+      "topic" : "at-risk-repartition",
+      "topicNameExtractor" : null,
+      "predecessors" : [ "at-risk" ],
+      "successors" : [ ]
+    }, {
+      "name" : "drop-unchanged-passenger-itineraries",
+      "type" : "processor",
+      "stores" : [ "passenger-itineraries-last-seen" ],
+      "predecessors" : [ "parse-passenger-itineraries" ],
+      "successors" : [ "passenger-itineraries-table" ]
+    }, {
+      "name" : "drop-unchanged-passenger-risk",
+      "type" : "processor",
+      "stores" : [ "passenger-risk-last-seen" ],
+      "predecessors" : [ "passenger-risk" ],
+      "successors" : [ "passenger-risk-table" ]
+    }, {
+      "name" : "join-connecting-flight-result",
+      "type" : "processor",
+      "stores" : [ "passenger-state" ],
+      "predecessors" : [ "join-connecting-flight-subscription-response-resolver" ],
+      "successors" : [ "passenger-changes", "passenger-index-changes" ]
+    }, {
+      "name" : "join-connecting-flight-subscription-registration-processor",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "join-inbound-flight-result" ],
+      "successors" : [ "join-connecting-flight-subscription-registration-sink" ]
+    }, {
+      "name" : "join-connecting-flight-subscription-registration-sink",
+      "type" : "sink",
+      "topic" : "join-connecting-flight-subscription-registration-topic",
+      "topicNameExtractor" : null,
+      "predecessors" : [ "join-connecting-flight-subscription-registration-processor" ],
+      "successors" : [ ]
+    }, {
+      "name" : "join-connecting-flight-subscription-response-resolver",
+      "type" : "processor",
+      "stores" : [ "inbound-legs" ],
+      "predecessors" : [ "join-connecting-flight-subscription-response-source" ],
+      "successors" : [ "join-connecting-flight-result" ]
+    }, {
+      "name" : "join-connecting-flight-subscription-response-source",
+      "type" : "source",
+      "topics" : [ "join-connecting-flight-subscription-response-topic" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "join-connecting-flight-subscription-response-resolver" ]
+    }, {
+      "name" : "join-inbound-flight-result",
+      "type" : "processor",
+      "stores" : [ "inbound-legs" ],
+      "predecessors" : [ "join-inbound-flight-subscription-response-resolver" ],
+      "successors" : [ "join-connecting-flight-subscription-registration-processor" ]
+    }, {
+      "name" : "join-inbound-flight-subscription-registration-processor",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "passenger-itineraries-table" ],
+      "successors" : [ "join-inbound-flight-subscription-registration-sink" ]
+    }, {
+      "name" : "join-inbound-flight-subscription-registration-sink",
+      "type" : "sink",
+      "topic" : "join-inbound-flight-subscription-registration-topic",
+      "topicNameExtractor" : null,
+      "predecessors" : [ "join-inbound-flight-subscription-registration-processor" ],
+      "successors" : [ ]
+    }, {
+      "name" : "join-inbound-flight-subscription-response-resolver",
+      "type" : "processor",
+      "stores" : [ "itineraries" ],
+      "predecessors" : [ "join-inbound-flight-subscription-response-source" ],
+      "successors" : [ "join-inbound-flight-result" ]
+    }, {
+      "name" : "join-inbound-flight-subscription-response-source",
+      "type" : "source",
+      "topics" : [ "join-inbound-flight-subscription-response-topic" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "join-inbound-flight-subscription-response-resolver" ]
+    }, {
+      "name" : "parse-passenger-itineraries",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "read-passenger-itineraries" ],
+      "successors" : [ "drop-unchanged-passenger-itineraries" ]
+    }, {
+      "name" : "passenger-changes",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "join-connecting-flight-result" ],
+      "successors" : [ "passenger-risk" ]
+    }, {
+      "name" : "passenger-index",
+      "type" : "processor",
+      "stores" : [ "passenger-index-keys", "passengers-by-connecting-flight", "passengers-by-inbound-flight" ],
+      "predecessors" : [ "passenger-index-changes" ],
+      "successors" : [ ]
+    }, {
+      "name" : "passenger-index-changes",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "join-connecting-flight-result" ],
+      "successors" : [ "passenger-index" ]
+    }, {
+      "name" : "passenger-itineraries-table",
+      "type" : "processor",
+      "stores" : [ "itineraries" ],
+      "predecessors" : [ "drop-unchanged-passenger-itineraries" ],
+      "successors" : [ "join-inbound-flight-subscription-registration-processor" ]
+    }, {
+      "name" : "passenger-risk",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "passenger-changes" ],
+      "successors" : [ "drop-unchanged-passenger-risk" ]
+    }, {
+      "name" : "passenger-risk-table",
+      "type" : "processor",
+      "stores" : [ "passenger-risks" ],
+      "predecessors" : [ "drop-unchanged-passenger-risk" ],
+      "successors" : [ "at-risk" ]
+    }, {
+      "name" : "read-passenger-itineraries",
+      "type" : "source",
+      "topics" : [ "passenger_itineraries" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "parse-passenger-itineraries" ]
+    } ]
+  }, {
+    "id" : 2,
+    "nodes" : [ {
+      "name" : "drop-unchanged-hotel-inventory",
+      "type" : "processor",
+      "stores" : [ "hotel-inventory-last-seen" ],
+      "predecessors" : [ "parse-hotel-inventory" ],
+      "successors" : [ "hotel-inventory-table" ]
+    }, {
+      "name" : "hotel-inventory-table",
+      "type" : "processor",
+      "stores" : [ "hotels" ],
+      "predecessors" : [ "drop-unchanged-hotel-inventory" ],
+      "successors" : [ ]
+    }, {
+      "name" : "parse-hotel-inventory",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "read-hotel-inventory" ],
+      "successors" : [ "drop-unchanged-hotel-inventory" ]
+    }, {
+      "name" : "read-hotel-inventory",
+      "type" : "source",
+      "topics" : [ "hotel_inventory" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "parse-hotel-inventory" ]
+    } ]
+  }, {
+    "id" : 3,
+    "nodes" : [ {
+      "name" : "drop-unchanged-passenger-recommendations",
+      "type" : "processor",
+      "stores" : [ "passenger-recommendations-last-seen" ],
+      "predecessors" : [ "parse-passenger-recommendations" ],
+      "successors" : [ "passenger-recommendations-table" ]
+    }, {
+      "name" : "offer-index",
+      "type" : "processor",
+      "stores" : [ "booked-offers-by-time", "offer-index-keys" ],
+      "predecessors" : [ "offer-index-changes" ],
+      "successors" : [ ]
+    }, {
+      "name" : "offer-index-changes",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "passenger-recommendations-table" ],
+      "successors" : [ "offer-index" ]
+    }, {
+      "name" : "parse-passenger-recommendations",
+      "type" : "processor",
+      "stores" : [ ],
+      "predecessors" : [ "read-passenger-recommendations" ],
+      "successors" : [ "drop-unchanged-passenger-recommendations" ]
+    }, {
+      "name" : "passenger-recommendations-table",
+      "type" : "processor",
+      "stores" : [ "offers" ],
+      "predecessors" : [ "drop-unchanged-passenger-recommendations" ],
+      "successors" : [ "offer-index-changes" ]
+    }, {
+      "name" : "read-passenger-recommendations",
+      "type" : "source",
+      "topics" : [ "passenger_recommendations" ],
+      "topicPattern" : null,
+      "predecessors" : [ ],
+      "successors" : [ "parse-passenger-recommendations" ]
+    } ]
+  } ],
+  "globalStores" : [ ]
+}

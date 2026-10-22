@@ -1,0 +1,157 @@
+Topologies:
+   Sub-topology: 0
+    Source: read-flight-status (topics: [flight_status])
+      --> parse-flight-status
+    Processor: parse-flight-status (stores: [])
+      --> drop-unchanged-flight-status
+      <-- read-flight-status
+    Processor: drop-unchanged-flight-status (stores: [flight-status-last-seen])
+      --> flight-status-table
+      <-- parse-flight-status
+    Processor: flight-status-table (stores: [flights])
+      --> join-at-risk-join-this, join-connecting-flight-foreign-join-subscription, join-inbound-flight-foreign-join-subscription
+      <-- drop-unchanged-flight-status
+    Source: count-at-risk-source (topics: [at-risk-repartition])
+      --> count-at-risk
+    Processor: count-at-risk (stores: [at-risk-by-flight])
+      --> join-at-risk-join-other
+      <-- count-at-risk-source
+    Processor: join-at-risk-join-other (stores: [flights])
+      --> join-at-risk
+      <-- count-at-risk
+    Processor: join-at-risk-join-this (stores: [at-risk-by-flight])
+      --> join-at-risk
+      <-- flight-status-table
+    Processor: join-at-risk (stores: [])
+      --> flight-impact
+      <-- join-at-risk-join-this, join-at-risk-join-other
+    Source: join-connecting-flight-subscription-registration-source (topics: [join-connecting-flight-subscription-registration-topic])
+      --> join-connecting-flight-subscription-receive
+    Source: join-inbound-flight-subscription-registration-source (topics: [join-inbound-flight-subscription-registration-topic])
+      --> join-inbound-flight-subscription-receive
+    Processor: flight-impact (stores: [flight-impact])
+      --> flight-index-changes
+      <-- join-at-risk
+    Processor: join-connecting-flight-subscription-receive (stores: [join-connecting-flight-subscription-store])
+      --> join-connecting-flight-subscription-join-foreign
+      <-- join-connecting-flight-subscription-registration-source
+    Processor: join-inbound-flight-subscription-receive (stores: [join-inbound-flight-subscription-store])
+      --> join-inbound-flight-subscription-join-foreign
+      <-- join-inbound-flight-subscription-registration-source
+    Processor: flight-index-changes (stores: [])
+      --> flight-index
+      <-- flight-impact
+    Processor: join-connecting-flight-foreign-join-subscription (stores: [join-connecting-flight-subscription-store])
+      --> join-connecting-flight-subscription-response-sink
+      <-- flight-status-table
+    Processor: join-connecting-flight-subscription-join-foreign (stores: [flights])
+      --> join-connecting-flight-subscription-response-sink
+      <-- join-connecting-flight-subscription-receive
+    Processor: join-inbound-flight-foreign-join-subscription (stores: [join-inbound-flight-subscription-store])
+      --> join-inbound-flight-subscription-response-sink
+      <-- flight-status-table
+    Processor: join-inbound-flight-subscription-join-foreign (stores: [flights])
+      --> join-inbound-flight-subscription-response-sink
+      <-- join-inbound-flight-subscription-receive
+    Processor: flight-index (stores: [flights-by-scheduled-time, flight-index-keys])
+      --> none
+      <-- flight-index-changes
+    Sink: join-connecting-flight-subscription-response-sink (topic: join-connecting-flight-subscription-response-topic)
+      <-- join-connecting-flight-subscription-join-foreign, join-connecting-flight-foreign-join-subscription
+    Sink: join-inbound-flight-subscription-response-sink (topic: join-inbound-flight-subscription-response-topic)
+      <-- join-inbound-flight-subscription-join-foreign, join-inbound-flight-foreign-join-subscription
+
+  Sub-topology: 1
+    Source: join-connecting-flight-subscription-response-source (topics: [join-connecting-flight-subscription-response-topic])
+      --> join-connecting-flight-subscription-response-resolver
+    Processor: join-connecting-flight-subscription-response-resolver (stores: [inbound-legs])
+      --> join-connecting-flight-result
+      <-- join-connecting-flight-subscription-response-source
+    Processor: join-connecting-flight-result (stores: [passenger-state])
+      --> passenger-changes, passenger-index-changes
+      <-- join-connecting-flight-subscription-response-resolver
+    Processor: passenger-changes (stores: [])
+      --> passenger-risk
+      <-- join-connecting-flight-result
+    Source: read-passenger-itineraries (topics: [passenger_itineraries])
+      --> parse-passenger-itineraries
+    Source: join-inbound-flight-subscription-response-source (topics: [join-inbound-flight-subscription-response-topic])
+      --> join-inbound-flight-subscription-response-resolver
+    Processor: parse-passenger-itineraries (stores: [])
+      --> drop-unchanged-passenger-itineraries
+      <-- read-passenger-itineraries
+    Processor: passenger-risk (stores: [])
+      --> drop-unchanged-passenger-risk
+      <-- passenger-changes
+    Processor: drop-unchanged-passenger-itineraries (stores: [passenger-itineraries-last-seen])
+      --> passenger-itineraries-table
+      <-- parse-passenger-itineraries
+    Processor: drop-unchanged-passenger-risk (stores: [passenger-risk-last-seen])
+      --> passenger-risk-table
+      <-- passenger-risk
+    Processor: join-inbound-flight-subscription-response-resolver (stores: [itineraries])
+      --> join-inbound-flight-result
+      <-- join-inbound-flight-subscription-response-source
+    Processor: join-inbound-flight-result (stores: [inbound-legs])
+      --> join-connecting-flight-subscription-registration-processor
+      <-- join-inbound-flight-subscription-response-resolver
+    Processor: passenger-itineraries-table (stores: [itineraries])
+      --> join-inbound-flight-subscription-registration-processor
+      <-- drop-unchanged-passenger-itineraries
+    Processor: passenger-risk-table (stores: [passenger-risks])
+      --> at-risk
+      <-- drop-unchanged-passenger-risk
+    Processor: at-risk (stores: [])
+      --> count-at-risk-sink
+      <-- passenger-risk-table
+    Processor: join-connecting-flight-subscription-registration-processor (stores: [])
+      --> join-connecting-flight-subscription-registration-sink
+      <-- join-inbound-flight-result
+    Processor: join-inbound-flight-subscription-registration-processor (stores: [])
+      --> join-inbound-flight-subscription-registration-sink
+      <-- passenger-itineraries-table
+    Processor: passenger-index-changes (stores: [])
+      --> passenger-index
+      <-- join-connecting-flight-result
+    Sink: count-at-risk-sink (topic: at-risk-repartition)
+      <-- at-risk
+    Sink: join-connecting-flight-subscription-registration-sink (topic: join-connecting-flight-subscription-registration-topic)
+      <-- join-connecting-flight-subscription-registration-processor
+    Sink: join-inbound-flight-subscription-registration-sink (topic: join-inbound-flight-subscription-registration-topic)
+      <-- join-inbound-flight-subscription-registration-processor
+    Processor: passenger-index (stores: [passengers-by-inbound-flight, passenger-index-keys, passengers-by-connecting-flight])
+      --> none
+      <-- passenger-index-changes
+
+  Sub-topology: 2
+    Source: read-hotel-inventory (topics: [hotel_inventory])
+      --> parse-hotel-inventory
+    Processor: parse-hotel-inventory (stores: [])
+      --> drop-unchanged-hotel-inventory
+      <-- read-hotel-inventory
+    Processor: drop-unchanged-hotel-inventory (stores: [hotel-inventory-last-seen])
+      --> hotel-inventory-table
+      <-- parse-hotel-inventory
+    Processor: hotel-inventory-table (stores: [hotels])
+      --> none
+      <-- drop-unchanged-hotel-inventory
+
+  Sub-topology: 3
+    Source: read-passenger-recommendations (topics: [passenger_recommendations])
+      --> parse-passenger-recommendations
+    Processor: parse-passenger-recommendations (stores: [])
+      --> drop-unchanged-passenger-recommendations
+      <-- read-passenger-recommendations
+    Processor: drop-unchanged-passenger-recommendations (stores: [passenger-recommendations-last-seen])
+      --> passenger-recommendations-table
+      <-- parse-passenger-recommendations
+    Processor: passenger-recommendations-table (stores: [offers])
+      --> offer-index-changes
+      <-- drop-unchanged-passenger-recommendations
+    Processor: offer-index-changes (stores: [])
+      --> offer-index
+      <-- passenger-recommendations-table
+    Processor: offer-index (stores: [booked-offers-by-time, offer-index-keys])
+      --> none
+      <-- offer-index-changes
+

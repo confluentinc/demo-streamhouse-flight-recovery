@@ -13,6 +13,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from . import kstreams_backend
 from .credentials import load_or_create_credentials_file
 from .login_checks import ensure_confluent_login
 from .terraform import get_project_root
@@ -208,7 +209,10 @@ def main():
             print("Destroy cancelled.")
             sys.exit(0)
 
-    # Step 5: Destroy environments
+    # Step 5: Stop the Kafka Streams app and its dashboard; their state belongs to the cluster being destroyed.
+    kstreams_backend.stop(clear_state=True)
+
+    # Step 6: Destroy environments
     print("\n=== Starting Destroy ===")
     for env in envs_to_destroy:
         env_path = root / "terraform" / env

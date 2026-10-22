@@ -1,0 +1,7 @@
+{"namespace": "org.apache.flink.avro.generated", "type": "record", "name": "record", "fields": [
+  {"name": "origin", "type": ["null", "string"], "default": null},
+  {"name": "destination", "type": ["null", "string"], "default": null},
+  {"name": "scheduled_time", "type": ["null", {"type": "long", "logicalType": "local-timestamp-millis"}], "default": null},
+  {"name": "estimated_time", "type": ["null", {"type": "long", "logicalType": "local-timestamp-millis"}], "default": null},
+  {"name": "status", "type": ["null", "string"], "default": null}
+]}

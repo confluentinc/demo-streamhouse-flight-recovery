@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>River Air: Flink and Kafka Streams</title>
+  <link rel="icon" type="image/svg+xml" href="/static/river-air-logo.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600;700&display=swap">
+  <style>
+    :root { --bg: #050912; --raise: #0a1122; --line: #1c2740; --fg: #e6edf7; --muted: #8b98b0;
+            --flink: #e6526e; --kstreams: #38bdf8; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: Inter, system-ui, sans-serif; }
+    body { display: grid; grid-template-rows: auto auto 1fr; height: 100vh; }
+    .same { margin: 0; padding: 10px 16px 6px; text-align: center; font: 600 15px/1.3 "Space Grotesk", sans-serif; }
+    .same span { color: var(--muted); font: 400 13px/1.3 Inter, sans-serif; margin-left: 8px; }
+    .engines, .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 6px; }
+    .engine { background: var(--raise); border: 1px solid var(--line); border-top: 3px solid; border-radius: 8px;
+              padding: 10px 14px; margin-bottom: 6px; }
+    .engine.flink { border-top-color: var(--flink); }
+    .engine.kstreams { border-top-color: var(--kstreams); }
+    .engine h2 { margin: 0 0 4px; font: 600 16px/1.2 "Space Grotesk", sans-serif; }
+    .engine h2 small { color: var(--muted); font: 500 13px/1.2 Inter, sans-serif; margin-left: 6px; }
+    .engine p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .pair { padding-bottom: 6px; min-height: 0; }
+    iframe { width: 100%; height: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+    @media (max-width: 900px) {
+      body { height: auto; }
+      .engines, .pair { grid-template-columns: 1fr; }
+      iframe { height: 80vh; }
+    }
+  </style>
+</head>
+<body>
+  <!-- The same dashboard twice: :8000 reads Flink's results through Lightning Tables, :8001 reads the Kafka Streams app. -->
+  <p class="same">Same topics, same rules, same answers<span>Two ways to run the stream processing behind one app</span></p>
+  <div class="engines">
+    <section class="engine flink">
+      <h2>Flink <small>Centralized stream processing</small></h2>
+      <p>Fully managed SQL that the whole business shares. Connection risk is computed once, and Lightning Tables
+        serves it to any app or agent. Results arrive at each Flink checkpoint, about once a minute.</p>
+    </section>
+    <section class="engine kstreams">
+      <h2>Kafka Streams <small>Stream processing inside your app</small></h2>
+      <p>A library in your own service: you own the full lifecycle. The app queries its own local state, so a change
+        shows up in under a second. You run it, and Confluent helps: the Kafka Streams UI shows its topology, health,
+        and where to look when something's off.</p>
+    </section>
+  </div>
+  <div class="pair">
+    <iframe src="http://127.0.0.1:8000/" title="Powered by Flink"></iframe>
+    <iframe src="http://127.0.0.1:8001/" title="Powered by Kafka Streams"></iframe>
+  </div>
+</body>
+</html>

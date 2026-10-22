@@ -1,0 +1,6 @@
+{"namespace": "org.apache.flink.avro.generated", "type": "record", "name": "record", "fields": [
+  {"name": "inbound_flight_id", "type": ["null", "string"], "default": null},
+  {"name": "inbound_seat", "type": ["null", "string"], "default": null},
+  {"name": "connecting_flight_id", "type": ["null", "string"], "default": null},
+  {"name": "connecting_seat", "type": ["null", "string"], "default": null}
+]}

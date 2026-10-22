@@ -1,0 +1,51 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'io.confluent.demo'
+version = '0.1.0'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://packages.confluent.io/maven' }
+    // Apache Kafka 4.4.0 RC4 (vote in progress). Drop this once 4.4.0 is on Maven Central.
+    maven { url 'https://repository.apache.org/content/repositories/orgapachekafka-2032/' }
+}
+
+def kafkaVersion = '4.4.0'
+
+dependencies {
+    implementation "org.apache.kafka:kafka-streams:${kafkaVersion}"
+    implementation "org.apache.kafka:kafka-clients:${kafkaVersion}"
+    implementation('io.confluent:kafka-streams-avro-serde:8.3.2') {
+        exclude group: 'org.apache.kafka'
+    }
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
+    implementation 'org.slf4j:slf4j-simple:2.0.16'
+
+    testImplementation "org.apache.kafka:kafka-streams-test-utils:${kafkaVersion}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'io.confluent.demo.riverair.OpsApp'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging { exceptionFormat = 'full' }
+}
+
+// Write the topology offline (no Kafka or Schema Registry), for the Kafka Streams UI or a visualizer.
+// Usage: ./gradlew describeTopology    writes topology.txt and topology.json in kstreams/
+tasks.register('describeTopology', JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'io.confluent.demo.riverair.DescribeTopology'
+    workingDir = projectDir
+}

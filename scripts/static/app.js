@@ -51,6 +51,9 @@ function hhmm(value) {
 // Lightning's "2026-09-25 01:00:00.000000" and the API's ISO "now" are both UTC.
 const utcMs = (value) => Date.parse(`${String(value).slice(0, 19).replace(" ", "T")}Z`);
 
+// Where the state comes from: Lightning Tables, or the Kafka Streams app (uv run airport-app --engine kstreams).
+const source = () => current?.source || "Lightning Tables";
+
 const riskClass = (risk) => ({ HIGH: "MISS", OK: "OK" }[risk] || "other");
 const label = (value) => String(value ?? "").replace(/_/g, " "); // ON_TIME -> ON TIME, display only
 
@@ -66,7 +69,10 @@ async function refresh() {
     current = await request("/api/state");
     lastUpdated = Date.now();
     render();
-    $("status-line").textContent = "Live from Lightning Tables";
+    $("status-line").textContent = `Live from ${source()}`;
+    $("hotels-src").textContent = source();
+    $("powered-by").textContent = current.powered_by ? `Powered by ${current.powered_by}` : "";
+    $("powered-by").dataset.engine = current.powered_by || "";
   } catch (error) {
     $("status-line").textContent = error.message;
   }
@@ -141,7 +147,7 @@ function render() {
   const shownFlights = openFlight ? current.flights.filter((row) => row.key === openFlight) : current.flights;
   $("flights-src").innerHTML = openFlight
     ? `Filtered to 1 of ${current.flights.length} · <button class="link" id="flights-show-all">Show all</button>`
-    : "Lightning Tables";
+    : source();
   if (openFlight) $("flights-show-all").onclick = () => selectFlight(null);
 
   // "Biggest impact" is the flight putting the most passengers at risk — not
